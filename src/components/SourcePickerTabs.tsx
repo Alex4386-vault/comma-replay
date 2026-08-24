@@ -1,7 +1,8 @@
 import { FolderOpenIcon, LogInIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { API_BASE, signInUrl, type AuthProviders } from "@/api";
+import { API_BASE, type AuthProviders } from "@/api";
+import { startLogin, type OAuthProvider } from "@/auth/oauth";
 
 type SourcePickerTabsProps = {
   providers: AuthProviders | null;
@@ -11,6 +12,14 @@ type SourcePickerTabsProps = {
 export function SourcePickerTabs({ providers, onOpenLocal }: SourcePickerTabsProps) {
   const signInAvailable = Boolean(providers?.google || providers?.github);
   const defaultTab = signInAvailable ? "signin" : "local";
+
+  async function onSignIn(provider: OAuthProvider) {
+    try {
+      await startLogin(provider);
+    } catch (err) {
+      console.error(err);
+    }
+  }
 
   return (
     <div className="mx-auto w-full max-w-md rounded-xl border bg-card p-6">
@@ -31,23 +40,24 @@ export function SourcePickerTabs({ providers, onOpenLocal }: SourcePickerTabsPro
           </p>
           <div className="flex flex-col gap-2">
             {providers?.google ? (
-              <Button type="button" asChild>
-                <a href={signInUrl("google")}>
-                  <LogInIcon data-icon="inline-start" />
-                  Sign in with Google
-                </a>
+              <Button type="button" onClick={() => onSignIn("google")}>
+                <LogInIcon data-icon="inline-start" />
+                Sign in with Google
               </Button>
             ) : null}
             {providers?.github ? (
-              <Button type="button" variant="outline" asChild>
-                <a href={signInUrl("github")}>
-                  <LogInIcon data-icon="inline-start" />
-                  Sign in with GitHub
-                </a>
+              <Button type="button" variant="outline" onClick={() => onSignIn("github")}>
+                <LogInIcon data-icon="inline-start" />
+                Sign in with GitHub
               </Button>
             ) : null}
             {!signInAvailable ? (
-              <Button type="button" variant="outline" disabled title={`API: ${API_BASE || "same origin"}`}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled
+                title={`Set VITE_GOOGLE_CLIENT_ID / VITE_GITHUB_CLIENT_ID. API: ${API_BASE || "same origin"}`}
+              >
                 Sign in unavailable
               </Button>
             ) : null}

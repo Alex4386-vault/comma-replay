@@ -1,3 +1,6 @@
+import { clearApiToken, getApiToken, setApiToken } from "@/auth/token";
+import { configuredProviders } from "@/auth/oauth";
+
 /** Base URL for replay-server. Empty = same origin. */
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
 
@@ -12,31 +15,60 @@ export type AuthUser = {
 export type AuthProviders = { google: boolean; github: boolean };
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  const token = getApiToken();
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   return fetch(`${API_BASE}${path}`, {
     ...init,
-    credentials: "include",
+    headers,
   });
 }
 
-export async function fetchProviders(): Promise<AuthProviders> {
-  const res = await apiFetch("/auth/providers");
-  if (!res.ok) return { google: false, github: false };
-  return res.json();
+/** Providers come from FE Client IDs (not the API). */
+export function fetchProviders(): AuthProviders {
+  return configuredProviders();
+}
+
+export async function createSession(
+  provider: "google" | "github",
+  accessToken: string,
+): Promise<AuthUser> {
+  const res = await fetch(`${API_BASE}/auth/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ provider, accessToken }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `session: ${res.status}`);
+  }
+  const body = (await res.json()) as { token?: string; user?: AuthUser };
+  if (!body.token || !body.user) throw new Error("session: missing token or user");
+  setApiToken(body.token);
+  return body.user;
 }
 
 export async function fetchMe(): Promise<AuthUser | null> {
+  if (!getApiToken()) return null;
   const res = await apiFetch("/api/me");
-  if (res.status === 401) return null;
+  if (res.status === 401) {
+    clearApiToken();
+    return null;
+  }
   if (!res.ok) throw new Error(`me: ${res.status}`);
   return res.json();
 }
 
-export function signInUrl(provider: "google" | "github"): string {
-  return `${API_BASE}/auth/${provider}`;
-}
-
 export async function logout(): Promise<void> {
-  await apiFetch("/auth/logout", { method: "POST" });
+  try {
+    if (getApiToken()) {
+      await apiFetch("/auth/logout", { method: "POST" });
+    }
+  } finally {
+    clearApiToken();
+  }
 }
 
 /** Server tree is always {user_id}/{device_id}/{record_id}. */

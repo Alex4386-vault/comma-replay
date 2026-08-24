@@ -1,0 +1,47 @@
+import { useEffect, useState } from "react";
+import { Spinner } from "@/components/ui/spinner";
+import { createSession } from "@/api";
+import { finishLoginFromCallback } from "@/auth/oauth";
+
+/** OAuth redirect target: /auth/callback?code=&state= */
+export function AuthCallback() {
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { provider, accessToken } = await finishLoginFromCallback(window.location.search);
+        await createSession(provider, accessToken);
+        if (cancelled) return;
+        window.location.replace("/");
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <div className="flex min-h-svh flex-col items-center justify-center gap-3 p-6">
+        <p className="text-sm font-medium text-destructive">Sign-in failed</p>
+        <p className="max-w-md text-center text-sm text-muted-foreground">{error}</p>
+        <a href="/" className="text-sm underline">
+          Back
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-svh items-center justify-center gap-2 text-sm text-muted-foreground">
+      <Spinner />
+      Completing sign-in…
+    </div>
+  );
+}

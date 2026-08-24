@@ -263,13 +263,13 @@ export function App() {
     let cancelled = false;
     (async () => {
       try {
-        const [me, prov] = await Promise.all([fetchMe(), fetchProviders()]);
+        setProviders(fetchProviders());
+        const me = await fetchMe();
         if (cancelled) return;
         setUser(me);
-        setProviders(prov);
         if (me) await loadServer();
       } catch {
-        if (!cancelled) setProviders({ google: false, github: false });
+        if (!cancelled) setProviders(fetchProviders());
       } finally {
         if (!cancelled) setAuthLoading(false);
       }
@@ -422,7 +422,7 @@ export function App() {
                 <div className="flex flex-1 items-center justify-center">
                   <Button type="button" disabled>
                     <Spinner data-icon="inline-start" />
-                    Checking session…
+                    Checking sign-in…
                   </Button>
                 </div>
               ) : showLanding ? (
