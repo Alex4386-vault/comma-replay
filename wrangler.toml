@@ -1,0 +1,3 @@
+name = "comma-replay"
+compatibility_date = "2026-08-24"
+pages_build_output_dir = "dist"

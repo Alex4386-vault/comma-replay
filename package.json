@@ -6,8 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:pages": "vite build",
     "preview": "vite preview",
     "codegen": "bash scripts/codegen.sh"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
