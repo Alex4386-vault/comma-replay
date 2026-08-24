@@ -1,6 +1,8 @@
 import { createPkcePair, randomState } from "./pkce";
+import { getAuthConfig, type OAuthProvider } from "./config";
 
-export type OAuthProvider = "google" | "github";
+export type { OAuthProvider } from "./config";
+export { configuredProviders, loadAuthConfig, getAuthConfig } from "./config";
 
 const PKCE_KEY = "comma-replay.pkce";
 
@@ -10,27 +12,6 @@ type PkcePending = {
   state: string;
   redirectUri: string;
 };
-
-function googleClientId(): string {
-  return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim() ?? "";
-}
-
-function githubClientId(): string {
-  return (import.meta.env.VITE_GITHUB_CLIENT_ID as string | undefined)?.trim() ?? "";
-}
-
-export function oauthRedirectUri(): string {
-  const override = (import.meta.env.VITE_OAUTH_REDIRECT_URI as string | undefined)?.trim();
-  if (override) return override.replace(/\/$/, "");
-  return `${window.location.origin}/auth/callback`;
-}
-
-export function configuredProviders(): { google: boolean; github: boolean } {
-  return {
-    google: Boolean(googleClientId()),
-    github: Boolean(githubClientId()),
-  };
-}
 
 function savePending(p: PkcePending): void {
   sessionStorage.setItem(PKCE_KEY, JSON.stringify(p));
@@ -47,13 +28,18 @@ function takePending(): PkcePending | null {
   }
 }
 
+function clientId(provider: OAuthProvider): string {
+  const c = getAuthConfig();
+  return provider === "google" ? c.googleClientId : c.githubClientId;
+}
+
 export async function startLogin(provider: OAuthProvider): Promise<void> {
-  const clientId = provider === "google" ? googleClientId() : githubClientId();
-  if (!clientId) throw new Error(`${provider} client id not configured`);
+  const id = clientId(provider);
+  if (!id) throw new Error(`${provider} client id not configured (missing at build time)`);
 
   const { verifier, challenge } = await createPkcePair();
   const state = randomState();
-  const redirectUri = oauthRedirectUri();
+  const redirectUri = getAuthConfig().redirectUri;
   savePending({ provider, verifier, state, redirectUri });
 
   const url = new URL(
@@ -61,7 +47,7 @@ export async function startLogin(provider: OAuthProvider): Promise<void> {
       ? "https://accounts.google.com/o/oauth2/v2/auth"
       : "https://github.com/login/oauth/authorize",
   );
-  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("client_id", id);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("state", state);
@@ -85,12 +71,12 @@ export async function exchangeCodeForAccessToken(
   verifier: string,
   redirectUri: string,
 ): Promise<string> {
-  const clientId = provider === "google" ? googleClientId() : githubClientId();
-  if (!clientId) throw new Error(`${provider} client id not configured`);
+  const id = clientId(provider);
+  if (!id) throw new Error(`${provider} client id not configured (missing at build time)`);
 
   if (provider === "google") {
     const body = new URLSearchParams({
-      client_id: clientId,
+      client_id: id,
       code,
       code_verifier: verifier,
       redirect_uri: redirectUri,
@@ -110,9 +96,8 @@ export async function exchangeCodeForAccessToken(
     return json.access_token;
   }
 
-  // GitHub public client + PKCE (no client_secret). Enable PKCE on the OAuth App.
   const body = new URLSearchParams({
-    client_id: clientId,
+    client_id: id,
     code,
     code_verifier: verifier,
     redirect_uri: redirectUri,
@@ -129,14 +114,17 @@ export async function exchangeCodeForAccessToken(
     const text = await res.text();
     throw new Error(`github token: ${res.status} ${text}`);
   }
-  const json = (await res.json()) as { access_token?: string; error?: string; error_description?: string };
+  const json = (await res.json()) as {
+    access_token?: string;
+    error?: string;
+    error_description?: string;
+  };
   if (json.error || !json.access_token) {
     throw new Error(json.error_description || json.error || "github token: missing access_token");
   }
   return json.access_token;
 }
 
-/** Complete the OAuth redirect: validate state, exchange code → provider access token. */
 export async function finishLoginFromCallback(search: string): Promise<{
   provider: OAuthProvider;
   accessToken: string;

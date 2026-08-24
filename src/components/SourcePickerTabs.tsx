@@ -56,7 +56,7 @@ export function SourcePickerTabs({ providers, onOpenLocal }: SourcePickerTabsPro
                 type="button"
                 variant="outline"
                 disabled
-                title={`Set VITE_GOOGLE_CLIENT_ID / VITE_GITHUB_CLIENT_ID. API: ${API_BASE || "same origin"}`}
+                title={`Rebuild with VITE_GOOGLE_CLIENT_ID / VITE_GITHUB_CLIENT_ID. API: ${API_BASE || "(empty)"}`}
               >
                 Sign in unavailable
               </Button>

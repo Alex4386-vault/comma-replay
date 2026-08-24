@@ -53,13 +53,15 @@ Regenerate types after cereal/opendbc schema changes: `npm run codegen`.
 | Build output directory | `dist` |
 | Node.js version | 20 (see `.nvmrc`) |
 
-Build-time env:
+Build-time env (must be present during `npm run build:pages` — Vite bakes them into JS):
 
 ```
-VITE_API_BASE=https://your-replay-server.example
+VITE_API_BASE=https://your-api.example
 VITE_GOOGLE_CLIENT_ID=...
 VITE_GITHUB_CLIENT_ID=...
 ```
+
+Production builds **fail** if both Client IDs are empty. On Coolify/Pages, mark these as **build** variables (not runtime-only), then redeploy.
 
 On the API:
 

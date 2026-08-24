@@ -1,8 +1,11 @@
 import { clearApiToken, getApiToken, setApiToken } from "@/auth/token";
-import { configuredProviders } from "@/auth/oauth";
+import { configuredProviders, getAuthConfig } from "@/auth/config";
 
-/** Base URL for the Go API (`server/`). Empty = same origin. */
-export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
+export function apiBase(): string {
+  return getAuthConfig().apiBase;
+}
+
+export const API_BASE = apiBase();
 
 export type AuthUser = {
   id: string;
@@ -20,13 +23,12 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  return fetch(`${API_BASE}${path}`, {
+  return fetch(`${apiBase()}${path}`, {
     ...init,
     headers,
   });
 }
 
-/** Providers come from FE Client IDs (not the API). */
 export function fetchProviders(): AuthProviders {
   return configuredProviders();
 }
@@ -35,7 +37,7 @@ export async function createSession(
   provider: "google" | "github",
   accessToken: string,
 ): Promise<AuthUser> {
-  const res = await fetch(`${API_BASE}/auth/session`, {
+  const res = await fetch(`${apiBase()}/auth/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ provider, accessToken }),
@@ -71,7 +73,6 @@ export async function logout(): Promise<void> {
   }
 }
 
-/** Server tree is always {user_id}/{device_id}/{record_id}. */
 export async function fetchDevices(): Promise<string[]> {
   const res = await apiFetch("/api/devices");
   if (!res.ok) throw new Error(`devices: ${res.status}`);

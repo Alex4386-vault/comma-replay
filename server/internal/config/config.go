@@ -7,11 +7,13 @@ import (
 )
 
 type Config struct {
-	Addr            string
-	DataRoot        string
-	FrontendOrigins []string
-	SessionTTL      time.Duration
-	AllowedUserIDs  map[string]struct{} // empty = any authenticated user may access own tree
+	Addr             string
+	DataRoot         string
+	FrontendOrigins  []string
+	GoogleClientID   string // public; exposed via GET /auth/config for the SPA
+	GitHubClientID   string
+	SessionTTL       time.Duration
+	AllowedUserIDs   map[string]struct{} // empty = any authenticated user may access own tree
 }
 
 func FromEnv() (Config, error) {
@@ -19,6 +21,8 @@ func FromEnv() (Config, error) {
 		Addr:            getenv("REPLAY_ADDR", ":8080"),
 		DataRoot:        getenv("REPLAY_DATA_ROOT", "./data"),
 		FrontendOrigins: splitOrigins(getenv("REPLAY_FRONTEND_ORIGIN", "http://localhost:5173")),
+		GoogleClientID:  strings.TrimSpace(os.Getenv("REPLAY_GOOGLE_CLIENT_ID")),
+		GitHubClientID:  strings.TrimSpace(os.Getenv("REPLAY_GITHUB_CLIENT_ID")),
 		SessionTTL:      7 * 24 * time.Hour,
 	}
 	if raw := os.Getenv("REPLAY_ALLOWED_USER_IDS"); raw != "" {

@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	r.Route("/auth", func(r chi.Router) {
+		r.Get("/config", s.handleAuthConfig)
 		r.Post("/session", s.handleSession)
 		r.Post("/logout", s.handleLogout)
 	})
@@ -96,6 +97,19 @@ type sessionRequest struct {
 type sessionResponse struct {
 	Token string    `json:"token"`
 	User  auth.User `json:"user"`
+}
+
+type authConfigResponse struct {
+	GoogleClientID string `json:"googleClientId,omitempty"`
+	GitHubClientID string `json:"githubClientId,omitempty"`
+}
+
+// handleAuthConfig returns public OAuth client IDs for the SPA (PKCE; no secrets).
+func (s *Server) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, authConfigResponse{
+		GoogleClientID: s.cfg.GoogleClientID,
+		GitHubClientID: s.cfg.GitHubClientID,
+	})
 }
 
 // handleSession exchanges a provider access token (from FE PKCE) for an API bearer token.
