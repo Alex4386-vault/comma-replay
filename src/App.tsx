@@ -28,6 +28,7 @@ import { SourcePickerTabs } from "@/components/SourcePickerTabs";
 import { createEnrichQueue, loadDriveMeta, type DriveMeta } from "@/driveMeta";
 import { useSettings } from "@/settings";
 import { FileSystemAccessSource } from "@/source/fileSystemAccess";
+import { ServerApiSource } from "@/source/serverApi";
 import type { DataSource } from "@/source/types";
 import {
   fetchDevices,
@@ -166,6 +167,7 @@ export function App() {
 
   const [sourceKind, setSourceKind] = useState<SourceKind>("none");
   const [localSource, setLocalSource] = useState<DataSource | null>(null);
+  const [serverSource, setServerSource] = useState<DataSource | null>(null);
   const [localLayout, setLocalLayout] = useState<LocalDirLayout>("record");
 
   const [devices, setDevices] = useState<DeviceEntry[]>([]);
@@ -189,6 +191,10 @@ export function App() {
       setDevices(devs);
       setSourceKind("server");
       setLocalSource(null);
+      setServerSource(new ServerApiSource("server"));
+      setDriveMeta({});
+      enrichStarted.current = new Set();
+      enrichQueue.current = createEnrichQueue();
 
       const nextDevice = deviceId && deviceIds.includes(deviceId) ? deviceId : deviceIds[0] ?? null;
       setSelectedDeviceId(nextDevice);
@@ -234,6 +240,7 @@ export function App() {
       setLocalSource(source);
       setLocalLayout(layout);
       setSourceKind("local");
+      setServerSource(null);
       setDevices(devs);
       setAllRecords(recs);
       setDriveMeta({});
@@ -304,6 +311,7 @@ export function App() {
     setUser(null);
     setSourceKind("none");
     setLocalSource(null);
+    setServerSource(null);
     setDevices([]);
     setAllRecords([]);
     setDriveMeta({});
@@ -324,12 +332,14 @@ export function App() {
 
   const { settings } = useSettings();
 
+  const activeSource = sourceKind === "local" ? localSource : sourceKind === "server" ? serverSource : null;
+
   const requestDriveMeta = useCallback(
     (rec: RecordEntry) => {
-      if (sourceKind !== "local" || !localSource) return;
+      if (!activeSource) return;
       if (enrichStarted.current.has(rec.id)) return;
       enrichStarted.current.add(rec.id);
-      const source = localSource;
+      const source = activeSource;
       const reverseGeocode = settings.reverseGeocode;
       enrichQueue.current(async () => {
         console.info("[replay] enrich visible drive", rec.recordId);
@@ -341,7 +351,7 @@ export function App() {
         });
       });
     },
-    [localSource, settings.reverseGeocode, sourceKind],
+    [activeSource, settings.reverseGeocode],
   );
 
   const hasSource = sourceKind !== "none";
@@ -401,7 +411,7 @@ export function App() {
             />
 
             <div className="relative flex flex-1 flex-col gap-4 overflow-hidden p-6">
-              {hasSource && !(selectedRecord && sourceKind === "local") ? (
+              {hasSource && !(selectedRecord && activeSource) ? (
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex flex-col gap-2">
                     <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
@@ -438,9 +448,9 @@ export function App() {
                   <Skeleton className="h-16 w-full" />
                   <Skeleton className="h-16 w-3/4" />
                 </div>
-              ) : selectedRecord && sourceKind === "local" && localSource ? (
+              ) : selectedRecord && activeSource ? (
                 <DriveDetail
-                  source={localSource}
+                  source={activeSource}
                   record={selectedRecord}
                   meta={driveMeta[selectedRecord.id]}
                   onClose={() => setSelectedRecord(null)}
@@ -460,9 +470,7 @@ export function App() {
                         meta={driveMeta[rec.id]}
                         selected={selectedRecord?.path === rec.path}
                         onSelect={() => setSelectedRecord(rec)}
-                        onVisible={
-                          sourceKind === "local" ? () => requestDriveMeta(rec) : undefined
-                        }
+                        onVisible={() => requestDriveMeta(rec)}
                       />
                     ))}
                   </ul>

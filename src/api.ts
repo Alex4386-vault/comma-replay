@@ -78,13 +78,46 @@ export async function logout(): Promise<void> {
 export async function fetchDevices(): Promise<string[]> {
   const res = await apiFetch("/api/devices");
   if (!res.ok) throw new Error(`devices: ${res.status}`);
-  const body = (await res.json()) as { devices?: string[] };
+  const body = (await res.json()) as { devices?: string[] | null };
   return body.devices ?? [];
 }
 
 export async function fetchRecords(deviceId: string): Promise<string[]> {
   const res = await apiFetch(`/api/devices/${encodeURIComponent(deviceId)}/records`);
   if (!res.ok) throw new Error(`records: ${res.status}`);
-  const body = (await res.json()) as { records?: string[] };
+  const body = (await res.json()) as { records?: string[] | null };
   return body.records ?? [];
+}
+
+export type RecordFileEntry = {
+  name: string;
+  path: string;
+  isDir: boolean;
+  size?: number;
+};
+
+export async function fetchRecordFiles(
+  deviceId: string,
+  recordId: string,
+): Promise<RecordFileEntry[]> {
+  const res = await apiFetch(
+    `/api/devices/${encodeURIComponent(deviceId)}/records/${encodeURIComponent(recordId)}/files`,
+  );
+  if (!res.ok) throw new Error(`files: ${res.status}`);
+  const body = (await res.json()) as { files?: RecordFileEntry[] | null };
+  return body.files ?? [];
+}
+
+export async function fetchRecordFileResponse(
+  deviceId: string,
+  recordId: string,
+  rel: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const clean = rel.replace(/^\/+/, "");
+  const path =
+    `/api/devices/${encodeURIComponent(deviceId)}` +
+    `/records/${encodeURIComponent(recordId)}` +
+    `/files/${clean.split("/").map(encodeURIComponent).join("/")}`;
+  return apiFetch(path, init);
 }
