@@ -1,0 +1,17 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/alex4386-vault/comma-replay-server:latest
+    ports:
+      - "${REPLAY_PORT:-8080}:8080"
+    environment:
+      REPLAY_ADDR: ":8080"
+      REPLAY_DATA_ROOT: /data
+      REPLAY_FRONTEND_ORIGIN: ${REPLAY_FRONTEND_ORIGIN:-http://localhost:5173}
+      REPLAY_ALLOWED_USER_IDS: ${REPLAY_ALLOWED_USER_IDS:-}
+    volumes:
+      # Host tree: {user_id}/{device_id}/{record_id}/...
+      - ${REPLAY_DATA_HOST:-./data}:/data:ro
+    restart: unless-stopped

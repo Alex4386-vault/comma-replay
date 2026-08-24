@@ -1,7 +1,7 @@
 import { clearApiToken, getApiToken, setApiToken } from "@/auth/token";
 import { configuredProviders } from "@/auth/oauth";
 
-/** Base URL for replay-server. Empty = same origin. */
+/** Base URL for the Go API (`server/`). Empty = same origin. */
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "";
 
 export type AuthUser = {

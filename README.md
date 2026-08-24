@@ -19,10 +19,12 @@ Route discovery (`src/route/discover.ts`) is a port of `tools/lib/route.py` layo
 
 1. Set Client IDs on the FE (`VITE_GOOGLE_CLIENT_ID`, `VITE_GITHUB_CLIENT_ID`).
 2. OAuth apps must allow redirect URI `{origin}/auth/callback` (override with `VITE_OAUTH_REDIRECT_URI`).
-3. SPA runs PKCE, exchanges `code` for a provider access token, then calls `replay-server` `POST /auth/session`.
+3. SPA runs PKCE, exchanges `code` for a provider access token, then calls `server` `POST /auth/session`.
 4. API calls send `Authorization: Bearer <api_token>` (stored in `sessionStorage`).
 
 GitHub OAuth Apps need **PKCE enabled** (no client secret on the SPA). Google: use a Web application client; SPA token exchange uses PKCE without a secret.
+
+API lives in [`server/`](./server/) — see that README for Go run / Docker / GHCR.
 
 ## Dev
 
