@@ -7,23 +7,27 @@ import (
 )
 
 type Config struct {
-	Addr             string
-	DataRoot         string
-	FrontendOrigins  []string
-	GoogleClientID   string // public; exposed via GET /auth/config for the SPA
-	GitHubClientID   string
-	SessionTTL       time.Duration
-	AllowedUserIDs   map[string]struct{} // empty = any authenticated user may access own tree
+	Addr               string
+	DataRoot           string
+	FrontendOrigins    []string
+	GoogleClientID     string
+	GoogleClientSecret string // optional; server-only
+	GitHubClientID     string
+	GitHubClientSecret string // required for GitHub code exchange; server-only
+	SessionTTL         time.Duration
+	AllowedUserIDs     map[string]struct{}
 }
 
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Addr:            getenv("REPLAY_ADDR", ":8080"),
-		DataRoot:        getenv("REPLAY_DATA_ROOT", "./data"),
-		FrontendOrigins: splitOrigins(getenv("REPLAY_FRONTEND_ORIGIN", "http://localhost:5173")),
-		GoogleClientID:  strings.TrimSpace(os.Getenv("REPLAY_GOOGLE_CLIENT_ID")),
-		GitHubClientID:  strings.TrimSpace(os.Getenv("REPLAY_GITHUB_CLIENT_ID")),
-		SessionTTL:      7 * 24 * time.Hour,
+		Addr:               getenv("REPLAY_ADDR", ":8080"),
+		DataRoot:           getenv("REPLAY_DATA_ROOT", "./data"),
+		FrontendOrigins:    splitOrigins(getenv("REPLAY_FRONTEND_ORIGIN", "http://localhost:5173")),
+		GoogleClientID:     strings.TrimSpace(os.Getenv("REPLAY_GOOGLE_CLIENT_ID")),
+		GoogleClientSecret: strings.TrimSpace(os.Getenv("REPLAY_GOOGLE_CLIENT_SECRET")),
+		GitHubClientID:     strings.TrimSpace(os.Getenv("REPLAY_GITHUB_CLIENT_ID")),
+		GitHubClientSecret: strings.TrimSpace(os.Getenv("REPLAY_GITHUB_CLIENT_SECRET")),
+		SessionTTL:         7 * 24 * time.Hour,
 	}
 	if raw := os.Getenv("REPLAY_ALLOWED_USER_IDS"); raw != "" {
 		cfg.AllowedUserIDs = make(map[string]struct{})
@@ -37,7 +41,6 @@ func FromEnv() (Config, error) {
 	return cfg, nil
 }
 
-// splitOrigins parses a comma-separated origin list (trailing slashes stripped).
 func splitOrigins(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))

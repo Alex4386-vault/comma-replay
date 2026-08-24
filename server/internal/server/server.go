@@ -90,8 +90,10 @@ func sessionFrom(ctx context.Context) (auth.Session, bool) {
 }
 
 type sessionRequest struct {
-	Provider    string `json:"provider"`
-	AccessToken string `json:"accessToken"`
+	Provider     string `json:"provider"`
+	Code         string `json:"code"`
+	CodeVerifier string `json:"codeVerifier"`
+	RedirectURI  string `json:"redirectUri"`
 }
 
 type sessionResponse struct {
@@ -104,7 +106,7 @@ type authConfigResponse struct {
 	GitHubClientID string `json:"githubClientId,omitempty"`
 }
 
-// handleAuthConfig returns public OAuth client IDs for the SPA (PKCE; no secrets).
+// handleAuthConfig returns public OAuth client IDs for the SPA authorize redirect (no secrets).
 func (s *Server) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, authConfigResponse{
 		GoogleClientID: s.cfg.GoogleClientID,
@@ -112,7 +114,7 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleSession exchanges a provider access token (from FE PKCE) for an API bearer token.
+// handleSession: FE PKCE code → server token exchange → opaque API bearer.
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	var body sessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -124,7 +126,19 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported provider", http.StatusBadRequest)
 		return
 	}
-	user, err := auth.FetchUser(r.Context(), body.Provider, body.AccessToken)
+
+	ex := auth.TokenExchange{
+		GoogleClientID:     s.cfg.GoogleClientID,
+		GoogleClientSecret: s.cfg.GoogleClientSecret,
+		GitHubClientID:     s.cfg.GitHubClientID,
+		GitHubClientSecret: s.cfg.GitHubClientSecret,
+	}
+	accessToken, err := ex.ExchangeCode(r.Context(), body.Provider, body.Code, body.CodeVerifier, body.RedirectURI)
+	if err != nil {
+		http.Error(w, "token exchange failed", http.StatusUnauthorized)
+		return
+	}
+	user, err := auth.FetchUser(r.Context(), body.Provider, accessToken)
 	if err != nil {
 		http.Error(w, "token validation failed", http.StatusUnauthorized)
 		return

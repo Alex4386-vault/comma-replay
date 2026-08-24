@@ -10,19 +10,19 @@ UI is **shadcn/ui (radix-nova)** plus the **ReUI** registry (`@reui` in `compone
 
 | Implementation | Use |
 |----------------|-----|
-| Sign in | Google/GitHub **PKCE on the SPA** → provider access token → `POST /auth/session` → API bearer |
+| Sign in | Google/GitHub **PKCE on the SPA** → `POST /auth/session` (server code exchange) → API bearer |
 | Bring your own directory | File System Access picker → lists `record_id` child dirs |
 
 Route discovery (`src/route/discover.ts`) is a port of `tools/lib/route.py` layouts over that interface.
 
 ## Auth (PKCE)
 
-1. Set Client IDs on the FE (`VITE_GOOGLE_CLIENT_ID`, `VITE_GITHUB_CLIENT_ID`).
-2. OAuth apps must allow redirect URI `{origin}/auth/callback` (override with `VITE_OAUTH_REDIRECT_URI`).
-3. SPA runs PKCE, exchanges `code` for a provider access token, then calls `server` `POST /auth/session`.
+1. Set Client IDs on the FE build (`VITE_GOOGLE_CLIENT_ID`, `VITE_GITHUB_CLIENT_ID`).
+2. OAuth apps must allow redirect URI `{origin}/auth/callback`.
+3. SPA runs PKCE; callback posts `code` + `code_verifier` to `server` `POST /auth/session` (token exchange is **not** done in the browser — GitHub blocks CORS).
 4. API calls send `Authorization: Bearer <api_token>` (stored in `sessionStorage`).
 
-GitHub OAuth Apps need **PKCE enabled** (no client secret on the SPA). Google: use a Web application client; SPA token exchange uses PKCE without a secret.
+On the API, set the same Client IDs plus **`REPLAY_GITHUB_CLIENT_SECRET`** (server-only). Keep `https://comma-replay.pages.dev` in `REPLAY_FRONTEND_ORIGIN`.
 
 API lives in [`server/`](./server/) — see that README for Go run / Docker / GHCR.
 

@@ -33,14 +33,16 @@ export function fetchProviders(): AuthProviders {
   return configuredProviders();
 }
 
-export async function createSession(
-  provider: "google" | "github",
-  accessToken: string,
-): Promise<AuthUser> {
+export async function createSession(payload: {
+  provider: "google" | "github";
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+}): Promise<AuthUser> {
   const res = await fetch(`${apiBase()}/auth/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ provider, accessToken }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const text = await res.text();

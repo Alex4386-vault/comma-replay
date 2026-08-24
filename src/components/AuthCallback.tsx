@@ -11,8 +11,8 @@ export function AuthCallback() {
     let cancelled = false;
     (async () => {
       try {
-        const { provider, accessToken } = await finishLoginFromCallback(window.location.search);
-        await createSession(provider, accessToken);
+        const payload = finishLoginFromCallback(window.location.search);
+        await createSession(payload);
         if (cancelled) return;
         window.location.replace("/");
       } catch (err) {

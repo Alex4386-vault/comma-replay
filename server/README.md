@@ -1,6 +1,6 @@
 # comma-replay server
 
-Go HTTP API for the comma-replay SPA. The SPA owns Google/GitHub OAuth (PKCE); this process validates provider access tokens and issues opaque API bearer tokens.
+Go HTTP API for the comma-replay SPA. The SPA starts Google/GitHub OAuth (PKCE); this process exchanges the auth code (server-side — GitHub blocks browser CORS), validates the user, and issues opaque API bearer tokens.
 
 ## On-disk layout
 
@@ -17,17 +17,19 @@ After login, only `{REPLAY_DATA_ROOT}/{oauth_user_id}/...` is readable.
 
 ## Auth
 
-1. FE completes PKCE at Google/GitHub (Client IDs on the SPA).
-2. `POST /auth/session` with `{ "provider": "google"|"github", "accessToken": "..." }`.
-3. Response `{ "token": "...", "user": { ... } }` — use `Authorization: Bearer <token>` on `/api/*`.
-4. `POST /auth/logout` with the same Bearer header revokes the token.
+1. FE starts PKCE authorize (Client IDs baked into the SPA).
+2. Callback receives `code`; FE `POST /auth/session` with `{ provider, code, codeVerifier, redirectUri }`.
+3. Server exchanges code→provider token (needs `REPLAY_GITHUB_CLIENT_SECRET` for GitHub), then issues API bearer.
+4. Response `{ "token": "...", "user": { ... } }` — use `Authorization: Bearer <token>` on `/api/*`.
+5. `POST /auth/logout` with the same Bearer header revokes the token.
 
 ## HTTP API
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/health` | — | Liveness |
-| POST | `/auth/session` | — | Exchange provider access token → API token |
+| GET | `/auth/config` | — | Public Client IDs (optional) |
+| POST | `/auth/session` | — | PKCE code → API token |
 | POST | `/auth/logout` | Bearer | Revoke API token |
 | GET | `/api/me` | Bearer | Current user |
 | GET | `/api/devices` | Bearer | Device IDs |

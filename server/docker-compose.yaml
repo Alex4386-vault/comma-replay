@@ -13,7 +13,9 @@ services:
       # Overridable from .env / shell (Compose substitutes ${} from .env automatically).
       REPLAY_FRONTEND_ORIGIN: ${REPLAY_FRONTEND_ORIGIN:-http://localhost:5173}
       REPLAY_GOOGLE_CLIENT_ID: ${REPLAY_GOOGLE_CLIENT_ID:-}
+      REPLAY_GOOGLE_CLIENT_SECRET: ${REPLAY_GOOGLE_CLIENT_SECRET:-}
       REPLAY_GITHUB_CLIENT_ID: ${REPLAY_GITHUB_CLIENT_ID:-}
+      REPLAY_GITHUB_CLIENT_SECRET: ${REPLAY_GITHUB_CLIENT_SECRET:-}
       REPLAY_ALLOWED_USER_IDS: ${REPLAY_ALLOWED_USER_IDS:-}
     volumes:
       - ${REPLAY_DATA_HOST:-./data}:/data:ro

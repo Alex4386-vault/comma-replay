@@ -13,6 +13,13 @@ type PkcePending = {
   redirectUri: string;
 };
 
+export type AuthCodePayload = {
+  provider: OAuthProvider;
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+};
+
 function savePending(p: PkcePending): void {
   sessionStorage.setItem(PKCE_KEY, JSON.stringify(p));
 }
@@ -33,6 +40,7 @@ function clientId(provider: OAuthProvider): string {
   return provider === "google" ? c.googleClientId : c.githubClientId;
 }
 
+/** Start PKCE authorize redirect (Client ID only; no token exchange in the browser). */
 export async function startLogin(provider: OAuthProvider): Promise<void> {
   const id = clientId(provider);
   if (!id) throw new Error(`${provider} client id not configured (missing at build time)`);
@@ -65,70 +73,8 @@ export async function startLogin(provider: OAuthProvider): Promise<void> {
   window.location.assign(url.toString());
 }
 
-export async function exchangeCodeForAccessToken(
-  provider: OAuthProvider,
-  code: string,
-  verifier: string,
-  redirectUri: string,
-): Promise<string> {
-  const id = clientId(provider);
-  if (!id) throw new Error(`${provider} client id not configured (missing at build time)`);
-
-  if (provider === "google") {
-    const body = new URLSearchParams({
-      client_id: id,
-      code,
-      code_verifier: verifier,
-      redirect_uri: redirectUri,
-      grant_type: "authorization_code",
-    });
-    const res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`google token: ${res.status} ${text}`);
-    }
-    const json = (await res.json()) as { access_token?: string };
-    if (!json.access_token) throw new Error("google token: missing access_token");
-    return json.access_token;
-  }
-
-  const body = new URLSearchParams({
-    client_id: id,
-    code,
-    code_verifier: verifier,
-    redirect_uri: redirectUri,
-  });
-  const res = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`github token: ${res.status} ${text}`);
-  }
-  const json = (await res.json()) as {
-    access_token?: string;
-    error?: string;
-    error_description?: string;
-  };
-  if (json.error || !json.access_token) {
-    throw new Error(json.error_description || json.error || "github token: missing access_token");
-  }
-  return json.access_token;
-}
-
-export async function finishLoginFromCallback(search: string): Promise<{
-  provider: OAuthProvider;
-  accessToken: string;
-}> {
+/** Validate callback query + PKCE state; return code payload for POST /auth/session. */
+export function finishLoginFromCallback(search: string): AuthCodePayload {
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
   const err = params.get("error");
   if (err) {
@@ -143,11 +89,10 @@ export async function finishLoginFromCallback(search: string): Promise<{
     throw new Error("invalid or expired OAuth state");
   }
 
-  const accessToken = await exchangeCodeForAccessToken(
-    pending.provider,
+  return {
+    provider: pending.provider,
     code,
-    pending.verifier,
-    pending.redirectUri,
-  );
-  return { provider: pending.provider, accessToken };
+    codeVerifier: pending.verifier,
+    redirectUri: pending.redirectUri,
+  };
 }
