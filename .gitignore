@@ -3,3 +3,4 @@ dist
 *.local
 server/.env
 server/data/
+.env.production
