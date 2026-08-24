@@ -1,30 +1,40 @@
 #!/usr/bin/env node
-/**
- * Fail fast before Vite if Client IDs are missing from the real process environment
- * (Cloudflare Pages dashboard → Environment variables).
- */
-const google = (process.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
-const github = (process.env.VITE_GITHUB_CLIENT_ID ?? "").trim();
-const api = (process.env.VITE_API_BASE ?? "").trim();
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 
-const viteKeys = Object.keys(process.env)
-  .filter((k) => k.startsWith("VITE_"))
-  .sort();
+function fromDotEnv(file) {
+  if (!existsSync(file)) return {};
+  const out = {};
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) continue;
+    out[t.slice(0, i)] = t.slice(i + 1).trim();
+  }
+  return out;
+}
+
+const fileEnv = {
+  ...fromDotEnv(resolve(".env")),
+  ...fromDotEnv(resolve(".env.production")),
+};
+
+function read(name) {
+  return (process.env[name] ?? fileEnv[name] ?? "").trim();
+}
+
+const google = read("VITE_GOOGLE_CLIENT_ID");
+const github = read("VITE_GITHUB_CLIENT_ID");
+const api = read("VITE_API_BASE");
 
 console.log("[bake-check] VITE_API_BASE:", api ? "set" : "empty");
 console.log("[bake-check] VITE_GOOGLE_CLIENT_ID:", google ? "set" : "empty");
 console.log("[bake-check] VITE_GITHUB_CLIENT_ID:", github ? "set" : "empty");
-console.log("[bake-check] all VITE_* keys in process.env:", viteKeys.join(", ") || "(none)");
 
 if (!google && !github) {
-  console.error(`
-[bake-check] Missing OAuth Client IDs in the build environment.
-
-Cloudflare Pages:
-  1. Project → Settings → Environment variables
-  2. Add VITE_GOOGLE_CLIENT_ID / VITE_GITHUB_CLIENT_ID / VITE_API_BASE
-  3. Enable for BOTH Production and Preview (branch builds use Preview)
-  4. Deployments → … → Retry deployment (editing vars does not rebuild by itself)
-`);
+  console.error(
+    "[bake-check] Missing Client IDs. Add them to .env.production or the build environment.",
+  );
   process.exit(1);
 }

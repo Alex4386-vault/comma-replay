@@ -8,7 +8,7 @@ import { defineConfig, loadEnv } from "vite";
 const root = fileURLToPath(new URL(".", import.meta.url));
 
 function readVite(name: string, fromFiles: Record<string, string>): string {
-  // Cloudflare Pages injects dashboard vars into process.env — prefer that over .env files.
+  // Prefer CI/dashboard process.env; fall back to .env / .env.production files.
   const raw = process.env[name] ?? fromFiles[name] ?? "";
   return String(raw).trim();
 }
@@ -20,15 +20,8 @@ export default defineConfig(({ mode }) => {
   const githubClientId = readVite("VITE_GITHUB_CLIENT_ID", fileEnv);
 
   if (mode === "production" && !googleClientId && !githubClientId) {
-    const seen = Object.keys(process.env)
-      .filter((k) => /^VITE_/i.test(k) || /GOOGLE|GITHUB|CLIENT_ID/i.test(k))
-      .sort();
     throw new Error(
-      [
-        "Production build requires VITE_GOOGLE_CLIENT_ID and/or VITE_GITHUB_CLIENT_ID in process.env (baked into the bundle).",
-        "Cloudflare Pages: Settings → Environment variables — set them for Production AND Preview, then Retry deployment.",
-        `process.env keys seen: ${seen.length ? seen.join(", ") : "(none)"}`,
-      ].join("\n"),
+      "Production build requires VITE_GOOGLE_CLIENT_ID and/or VITE_GITHUB_CLIENT_ID (from process.env or .env.production).",
     );
   }
 
