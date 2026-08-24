@@ -170,7 +170,7 @@ func fetchGoogleUser(ctx context.Context, accessToken string) (User, error) {
 		return User{}, fmt.Errorf("google userinfo: empty id")
 	}
 	return User{
-		ID:        body.ID,
+		ID:        "google_" + body.ID,
 		Email:     body.Email,
 		Name:      body.Name,
 		Provider:  "google",
@@ -212,7 +212,7 @@ func fetchGitHubUser(ctx context.Context, accessToken string) (User, error) {
 		name = body.Login
 	}
 	return User{
-		ID:        fmt.Sprintf("%d", body.ID),
+		ID:        fmt.Sprintf("github_%d", body.ID),
 		Email:     email,
 		Name:      name,
 		Provider:  "github",

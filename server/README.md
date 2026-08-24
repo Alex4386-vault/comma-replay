@@ -6,14 +6,14 @@ Go HTTP API for the comma-replay SPA. The SPA starts Google/GitHub OAuth (PKCE);
 
 ```
 {REPLAY_DATA_ROOT}/
-  {user_id}/
+  {provider}_{oauth_subject}/   ← e.g. github_27724108, google_1024…
     {device_id}/
       {record_id}/
         rlog.zst
         ...
 ```
 
-After login, only `{REPLAY_DATA_ROOT}/{oauth_user_id}/...` is readable.
+After login, only `{REPLAY_DATA_ROOT}/{provider}_{oauth_subject}/...` is readable.
 
 ## Auth
 

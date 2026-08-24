@@ -59,7 +59,7 @@ func (s *Store) ListDevices(userID string) ([]string, error) {
 	}
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return []string{}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ func (s *Store) ListRecords(userID, deviceID string) ([]string, error) {
 	dir := filepath.Join(base, deviceID)
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return []string{}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -110,7 +110,7 @@ func (s *Store) ListRecord(userID, deviceID, recordID string) ([]FileEntry, erro
 	}
 	entries, err := os.ReadDir(abs)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return []FileEntry{}, nil
 	}
 	if err != nil {
 		return nil, err
