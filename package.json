@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:pages": "vite build --mode production",
+    "build:pages": "node scripts/bake-check.mjs && vite build --mode production",
     "preview": "vite preview",
     "codegen": "bash scripts/codegen.sh"
   },
