@@ -55,12 +55,15 @@ cd server
 docker compose up -d --build
 ```
 
-Env for Compose:
+Env for Compose — copy `.env.example` to `.env`:
 
 ```bash
-export REPLAY_DATA_HOST=/path/to/data
-export REPLAY_FRONTEND_ORIGIN=http://localhost:5173,https://your-pages.pages.dev
-# optional: REPLAY_PORT, REPLAY_ALLOWED_USER_IDS
+cd server
+cp .env.example .env
+# edit REPLAY_DATA_HOST, REPLAY_FRONTEND_ORIGIN, …
+docker compose up -d --build
 ```
+
+Compose reads `server/.env` for `${…}` substitution and injects it into the container via `env_file`.
 
 Packages may be private by default — mark the package public or grant pull access as needed.
