@@ -32,10 +32,15 @@ After login, only `{REPLAY_DATA_ROOT}/{provider}_{oauth_subject}/...` is readabl
 | POST | `/auth/session` | — | PKCE code → API token |
 | POST | `/auth/logout` | Bearer | Revoke API token |
 | GET | `/api/me` | Bearer | Current user |
+| GET | `/api/geocode?lat=&lon=` | Bearer | Reverse geocode (in-memory cache; miss → BigDataCloud) |
 | GET | `/api/devices` | Bearer | Device IDs |
 | GET | `/api/devices/{deviceID}/records` | Bearer | Record IDs |
 | GET | `/api/devices/{deviceID}/records/{recordID}/files` | Bearer | List files |
 | GET | `/api/devices/{deviceID}/records/{recordID}/files/{path}` | Bearer | Download (Range OK) |
+| GET | `/api/devices/{deviceID}/records/{recordID}/meta` | Bearer | Cached drive metrics (404 on miss) |
+| PUT | `/api/devices/{deviceID}/records/{recordID}/meta` | Bearer | Store drive metrics (`ready`/`empty`/`error`) |
+
+Geocode cache key is lat/lon rounded to 3 decimals (24h TTL). Drive meta is keyed by user + device + record (7d TTL). Both live in process memory only.
 
 ## Run
 

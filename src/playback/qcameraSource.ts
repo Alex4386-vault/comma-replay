@@ -38,6 +38,8 @@ export class QcameraSource {
   private video: HTMLVideoElement;
   private events: FrameSourceEvents;
   private slots = new Map<number, SegmentSlot>();
+  /** In-flight openObjectURL for segments being prefetched. */
+  private preloadInflight = new Map<number, Promise<SegmentSlot>>();
   private player: MpegtsPlayer | null = null;
   private segmentIndex = -1;
   private loadGen = 0;
@@ -113,6 +115,7 @@ export class QcameraSource {
     this.video.removeEventListener("timeupdate", this.onTimeUpdate);
     this.video.removeEventListener("error", this.onVideoError);
     this.destroyPlayer();
+    this.preloadInflight.clear();
     for (const slot of this.slots.values()) {
       slot.handle.revoke();
     }
@@ -190,6 +193,22 @@ export class QcameraSource {
     const existing = this.slots.get(index);
     if (existing) return existing;
 
+    const inflight = this.preloadInflight.get(index);
+    if (inflight) return inflight;
+
+    const task = this.fetchSlot(index);
+    this.preloadInflight.set(index, task);
+    try {
+      return await task;
+    } finally {
+      this.preloadInflight.delete(index);
+    }
+  }
+
+  private async fetchSlot(index: number): Promise<SegmentSlot> {
+    const cached = this.slots.get(index);
+    if (cached) return cached;
+
     const segDir = this.record.segmentPaths[index];
     if (!segDir) throw new Error(`Missing segment path at index ${index}`);
 
@@ -219,6 +238,27 @@ export class QcameraSource {
     const detail =
       lastErr instanceof Error ? lastErr.message : lastErr ? String(lastErr) : "not found";
     throw new Error(`No qcamera under ${segDir}: ${detail}`);
+  }
+
+  /** Fetch next segment's qcamera.ts into a blob URL while the current one plays. */
+  private preloadNext(fromIndex: number): void {
+    const next = fromIndex + 1;
+    if (next >= this.record.segmentPaths.length) return;
+    if (this.slots.has(next) || this.preloadInflight.has(next)) return;
+    void this.resolveSlot(next).catch((err) => {
+      if (this.disposed) return;
+      console.warn("[replay:qcamera] preload failed", next, err);
+    });
+  }
+
+  /** Keep prev/current/next blobs; revoke the rest to bound memory. */
+  private trimSlots(around: number): void {
+    const keep = new Set([around - 1, around, around + 1]);
+    for (const [i, slot] of this.slots) {
+      if (keep.has(i)) continue;
+      slot.handle.revoke();
+      this.slots.delete(i);
+    }
   }
 
   private async loadSegment(index: number, offset: number): Promise<void> {
@@ -258,6 +298,9 @@ export class QcameraSource {
     this.player = player;
     this.segmentIndex = index;
     this.events.onSegment?.(index);
+
+    this.trimSlots(index);
+    this.preloadNext(index);
 
     await waitEvent(this.video, "loadedmetadata", 20_000);
     if (this.disposed || gen !== this.loadGen) return;

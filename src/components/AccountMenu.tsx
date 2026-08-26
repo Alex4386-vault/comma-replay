@@ -154,7 +154,7 @@ export function AccountMenu({ user, onLogout }: AccountMenuProps) {
                 <FieldContent>
                   <FieldLabel htmlFor="setting-geocode">Reverse geocode</FieldLabel>
                   <FieldDescription>
-                    Resolve GPS locks to place names via a public geocoder (cached; off by default).
+                    Resolve GPS locks to place names (server-cached when signed in; off by default).
                   </FieldDescription>
                 </FieldContent>
                 <Switch

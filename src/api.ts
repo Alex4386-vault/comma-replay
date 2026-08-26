@@ -121,3 +121,60 @@ export async function fetchRecordFileResponse(
     `/files/${clean.split("/").map(encodeURIComponent).join("/")}`;
   return apiFetch(path, init);
 }
+
+export type CachedPlace = { place: string; region: string };
+
+export async function fetchGeocode(lat: number, lon: number): Promise<CachedPlace> {
+  const q = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+  });
+  const res = await apiFetch(`/api/geocode?${q}`);
+  if (!res.ok) throw new Error(`geocode: ${res.status}`);
+  return res.json();
+}
+
+export type CachedDriveMeta = {
+  status: "ready" | "empty" | "error";
+  first: {
+    latitude: number;
+    longitude: number;
+    unixTimestampMillis: number | null;
+  } | null;
+  last: {
+    latitude: number;
+    longitude: number;
+    unixTimestampMillis: number | null;
+  } | null;
+  start?: CachedPlace;
+  end?: CachedPlace;
+  error?: string;
+};
+
+export async function fetchDriveMeta(
+  deviceId: string,
+  recordId: string,
+): Promise<CachedDriveMeta | null> {
+  const res = await apiFetch(
+    `/api/devices/${encodeURIComponent(deviceId)}/records/${encodeURIComponent(recordId)}/meta`,
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`meta: ${res.status}`);
+  return res.json();
+}
+
+export async function putDriveMeta(
+  deviceId: string,
+  recordId: string,
+  meta: CachedDriveMeta,
+): Promise<void> {
+  const res = await apiFetch(
+    `/api/devices/${encodeURIComponent(deviceId)}/records/${encodeURIComponent(recordId)}/meta`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(meta),
+    },
+  );
+  if (!res.ok) throw new Error(`meta put: ${res.status}`);
+}

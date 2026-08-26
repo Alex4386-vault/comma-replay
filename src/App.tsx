@@ -341,9 +341,14 @@ export function App() {
       enrichStarted.current.add(rec.id);
       const source = activeSource;
       const reverseGeocode = settings.reverseGeocode;
+      const deviceId = rec.deviceId ?? selectedDeviceId;
+      const serverCache =
+        sourceKind === "server" && deviceId
+          ? { deviceId, recordId: rec.recordId }
+          : undefined;
       enrichQueue.current(async () => {
         console.info("[replay] enrich visible drive", rec.recordId);
-        await loadDriveMeta(source, rec, { reverseGeocode }, (meta) => {
+        await loadDriveMeta(source, rec, { reverseGeocode, serverCache }, (meta) => {
           if (meta.status === "error") {
             console.error("[replay] enrich error", rec.id, meta.error);
           }
@@ -351,7 +356,7 @@ export function App() {
         });
       });
     },
-    [activeSource, settings.reverseGeocode],
+    [activeSource, settings.reverseGeocode, sourceKind, selectedDeviceId],
   );
 
   const hasSource = sourceKind !== "none";

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/Alex4386-vault/comma-replay/server/internal/auth"
 	"github.com/Alex4386-vault/comma-replay/server/internal/config"
+	"github.com/Alex4386-vault/comma-replay/server/internal/geocode"
+	"github.com/Alex4386-vault/comma-replay/server/internal/meta"
 	"github.com/Alex4386-vault/comma-replay/server/internal/store"
 )
 
@@ -20,13 +23,17 @@ type Server struct {
 	cfg      config.Config
 	store    *store.Store
 	sessions *auth.Store
+	geocode  *geocode.Cache
+	meta     *meta.Cache
 }
 
-func New(cfg config.Config, st *store.Store, sessions *auth.Store) *Server {
+func New(cfg config.Config, st *store.Store, sessions *auth.Store, geo *geocode.Cache, driveMeta *meta.Cache) *Server {
 	return &Server{
 		cfg:      cfg,
 		store:    st,
 		sessions: sessions,
+		geocode:  geo,
+		meta:     driveMeta,
 	}
 }
 
@@ -36,7 +43,7 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   s.cfg.FrontendOrigins,
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: false,
 	}))
@@ -55,10 +62,13 @@ func (s *Server) Handler() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.requireBearer)
 		r.Get("/me", s.handleMe)
+		r.Get("/geocode", s.handleGeocode)
 		r.Get("/devices", s.handleDevices)
 		r.Get("/devices/{deviceID}/records", s.handleRecords)
 		r.Get("/devices/{deviceID}/records/{recordID}/files", s.handleRecordFiles)
 		r.Get("/devices/{deviceID}/records/{recordID}/files/*", s.handleServeFile)
+		r.Get("/devices/{deviceID}/records/{recordID}/meta", s.handleGetDriveMeta)
+		r.Put("/devices/{deviceID}/records/{recordID}/meta", s.handlePutDriveMeta)
 	})
 
 	return r
@@ -207,6 +217,56 @@ func (s *Server) handleServeFile(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	w.Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(w, r, st.Name(), st.ModTime(), f.(io.ReadSeeker))
+}
+
+func (s *Server) handleGeocode(w http.ResponseWriter, r *http.Request) {
+	lat, err1 := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
+	lon, err2 := strconv.ParseFloat(r.URL.Query().Get("lon"), 64)
+	if err1 != nil || err2 != nil {
+		http.Error(w, "lat and lon required", http.StatusBadRequest)
+		return
+	}
+	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		http.Error(w, "invalid coordinates", http.StatusBadRequest)
+		return
+	}
+	place, err := s.geocode.Lookup(lat, lon)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, place)
+}
+
+func (s *Server) handleGetDriveMeta(w http.ResponseWriter, r *http.Request) {
+	sess, _ := sessionFrom(r.Context())
+	deviceID := chi.URLParam(r, "deviceID")
+	recordID := chi.URLParam(r, "recordID")
+	m, ok := s.meta.Get(sess.User.ID, deviceID, recordID)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, m)
+}
+
+func (s *Server) handlePutDriveMeta(w http.ResponseWriter, r *http.Request) {
+	sess, _ := sessionFrom(r.Context())
+	deviceID := chi.URLParam(r, "deviceID")
+	recordID := chi.URLParam(r, "recordID")
+	var body meta.DriveMeta
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	switch body.Status {
+	case "ready", "empty", "error":
+	default:
+		http.Error(w, "status must be ready, empty, or error", http.StatusBadRequest)
+		return
+	}
+	s.meta.Put(sess.User.ID, deviceID, recordID, body)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -2,6 +2,13 @@ import { FILE_NAMES } from "@/route/patterns";
 import { gpsLockInLog, type GpsFix, type GpsLockMode } from "@/log/gps";
 import type { DataSource } from "@/source/types";
 import type { RecordEntry } from "@/records";
+import {
+  fetchDriveMeta,
+  fetchGeocode,
+  putDriveMeta,
+  type CachedDriveMeta,
+} from "@/api";
+import { getApiToken } from "@/auth/token";
 
 const QLOG_NAMES = FILE_NAMES.qlog;
 
@@ -33,6 +40,8 @@ export type DriveMeta = {
 
 export type EnrichOptions = {
   reverseGeocode: boolean;
+  /** When set, prefer server in-memory drive meta + geocode caches. */
+  serverCache?: { deviceId: string; recordId: string };
 };
 
 async function segmentQlogPath(source: DataSource, segmentDir: string): Promise<string | null> {
@@ -159,7 +168,7 @@ async function reverseGeocodeNetwork(fix: GpsFix): Promise<PlaceLabel> {
   return { place: neighbourhood, region };
 }
 
-async function reverseGeocode(fix: GpsFix): Promise<PlaceLabel> {
+async function reverseGeocodeClient(fix: GpsFix): Promise<PlaceLabel> {
   const key = geocodeKey(fix);
   const cached = geocodeCache.get(key);
   if (cached) return cached;
@@ -183,30 +192,73 @@ async function reverseGeocode(fix: GpsFix): Promise<PlaceLabel> {
   return task;
 }
 
+async function reverseGeocodeServer(fix: GpsFix): Promise<PlaceLabel> {
+  try {
+    return await fetchGeocode(fix.latitude, fix.longitude);
+  } catch (err) {
+    WARN("server geocode failed", err);
+    return formatCoordLabel(fix);
+  }
+}
+
+async function reverseGeocode(fix: GpsFix, viaServer: boolean): Promise<PlaceLabel> {
+  if (viaServer && getApiToken()) return reverseGeocodeServer(fix);
+  return reverseGeocodeClient(fix);
+}
+
 export async function placesFromFixes(
   first: GpsFix | null,
   last: GpsFix | null,
   reverseGeocodeEnabled: boolean,
+  viaServer = false,
 ): Promise<{ start?: PlaceLabel; end?: PlaceLabel }> {
   const [start, end] = await Promise.all([
     first
       ? reverseGeocodeEnabled
-        ? reverseGeocode(first)
+        ? reverseGeocode(first, viaServer)
         : Promise.resolve(formatCoordLabel(first))
       : Promise.resolve(undefined),
     last
       ? reverseGeocodeEnabled
-        ? reverseGeocode(last)
+        ? reverseGeocode(last, viaServer)
         : Promise.resolve(formatCoordLabel(last))
       : Promise.resolve(undefined),
   ]);
   return { start, end };
 }
 
+function toCachedMeta(meta: DriveMeta): CachedDriveMeta | null {
+  if (meta.status !== "ready" && meta.status !== "empty" && meta.status !== "error") {
+    return null;
+  }
+  return {
+    status: meta.status,
+    first: meta.first,
+    last: meta.last,
+    start: meta.start,
+    end: meta.end,
+    error: meta.error,
+  };
+}
+
+function fromCachedMeta(cached: CachedDriveMeta): DriveMeta {
+  return {
+    status: cached.status,
+    first: cached.first,
+    last: cached.last,
+    start: cached.start,
+    end: cached.end,
+    error: cached.error,
+  };
+}
+
 /**
  * Two-phase enrich. Calls `onUpdate` as each phase completes.
  * 1) first+last qlog → date/time (+ coords)
  * 2) optional expand GPS / reverse geocode → places
+ *
+ * With `serverCache`, reads/writes the server in-memory drive meta cache and
+ * routes reverse geocode through the server lat/lon cache.
  */
 export async function loadDriveMeta(
   source: DataSource,
@@ -214,10 +266,27 @@ export async function loadDriveMeta(
   options: EnrichOptions,
   onUpdate: (meta: DriveMeta) => void,
 ): Promise<void> {
+  const viaServer = Boolean(options.serverCache && getApiToken());
+
+  if (viaServer && options.serverCache) {
+    try {
+      const cached = await fetchDriveMeta(options.serverCache.deviceId, options.serverCache.recordId);
+      if (cached) {
+        LOG(`drive ${record.recordId} — server meta hit`);
+        onUpdate(fromCachedMeta(cached));
+        return;
+      }
+    } catch (err) {
+      WARN(`drive ${record.recordId}: server meta fetch failed`, err);
+    }
+  }
+
   const paths = record.segmentPaths;
   LOG(`drive ${record.recordId} — ${paths.length} segment(s)`);
   if (paths.length === 0) {
-    onUpdate({ status: "empty", first: null, last: null });
+    const empty: DriveMeta = { status: "empty", first: null, last: null };
+    onUpdate(empty);
+    await persistServerMeta(options.serverCache, empty);
     return;
   }
 
@@ -227,36 +296,55 @@ export async function loadDriveMeta(
     let { first, last } = await locksFromEnds(source, paths);
 
     if (!first && !last) {
-      // Ends had no lock — keep raw date/time; skeleton places while expanding.
       onUpdate({ status: "loading-places", first: null, last: null });
       ({ first, last } = await expandLocks(source, paths, { first, last }));
       if (!first && !last) {
         WARN(`drive ${record.recordId}: no GPS lock`);
-        onUpdate({ status: "empty", first: null, last: null });
+        const empty: DriveMeta = { status: "empty", first: null, last: null };
+        onUpdate(empty);
+        await persistServerMeta(options.serverCache, empty);
         return;
       }
     }
 
-    // Phase 1 done — date/time/duration from GPS timestamps.
+    let ready: DriveMeta;
     if (options.reverseGeocode) {
       onUpdate({ status: "loading-places", first, last });
-      const { start, end } = await placesFromFixes(first, last, true);
-      onUpdate({ status: "ready", first, last, start, end });
+      const { start, end } = await placesFromFixes(first, last, true, viaServer);
+      ready = { status: "ready", first, last, start, end };
     } else {
-      onUpdate({
+      ready = {
         status: "ready",
         first,
         last,
         start: first ? formatCoordLabel(first) : undefined,
         end: last ? formatCoordLabel(last) : undefined,
-      });
+      };
     }
+    onUpdate(ready);
+    await persistServerMeta(options.serverCache, ready);
 
     LOG(`drive ${record.recordId} ready`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     ERR(`drive ${record.recordId} failed`, message);
-    onUpdate({ status: "error", first: null, last: null, error: message });
+    const failed: DriveMeta = { status: "error", first: null, last: null, error: message };
+    onUpdate(failed);
+    await persistServerMeta(options.serverCache, failed);
+  }
+}
+
+async function persistServerMeta(
+  serverCache: EnrichOptions["serverCache"],
+  meta: DriveMeta,
+): Promise<void> {
+  if (!serverCache || !getApiToken()) return;
+  const body = toCachedMeta(meta);
+  if (!body) return;
+  try {
+    await putDriveMeta(serverCache.deviceId, serverCache.recordId, body);
+  } catch (err) {
+    WARN("server meta put failed", err);
   }
 }
 
