@@ -311,7 +311,17 @@ export function DriveDetail({
               <SettingsIcon />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="z-[1100] w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>View</DropdownMenuLabel>
+              <DropdownMenuCheckboxItem
+                checked={settings.showMap}
+                onCheckedChange={(checked) => setSettings({ showMap: Boolean(checked) })}
+              >
+                Show map
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuLabel>Quality</DropdownMenuLabel>
               <DropdownMenuRadioGroup
@@ -362,10 +372,10 @@ export function DriveDetail({
       <div
         className={cn(
           "flex min-h-0 flex-1 gap-2",
-          showMap ? "flex-col lg:flex-row" : "flex-col",
+          showMap ? "flex-col lg:flex-row lg:items-stretch" : "flex-col",
         )}
       >
-        <div className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg bg-black">
+        <div className="relative isolate z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg bg-black">
           <video
             ref={videoRef}
             className={cn(
@@ -421,8 +431,9 @@ export function DriveDetail({
         </div>
 
         {showMap ? (
-          <div className="relative min-h-[220px] min-w-0 flex-1 overflow-hidden rounded-lg border lg:min-h-0">
+          <div className="relative z-0 aspect-square w-full shrink-0 isolate overflow-hidden rounded-lg border lg:h-full lg:w-auto lg:max-w-full">
             <DriveMap
+              className="absolute inset-0"
               getPosition={() => {
                 const frame = timelineRef.current?.stateAt(
                   sessionRef.current.t,
@@ -466,7 +477,7 @@ export function DriveDetail({
             <Button
               type="button"
               variant="outline"
-              size="icon"
+              size="icon-sm"
               onClick={togglePlay}
               disabled={loading || !!error}
               aria-label={session.playing ? "Pause" : "Play"}
@@ -513,7 +524,7 @@ export function DriveDetail({
                 <ChevronUpIcon data-icon="inline-end" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="center" className="w-auto min-w-28">
+            <DropdownMenuContent side="top" align="center" className="z-[1100] w-auto min-w-28">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>Speed</DropdownMenuLabel>
                 <DropdownMenuRadioGroup

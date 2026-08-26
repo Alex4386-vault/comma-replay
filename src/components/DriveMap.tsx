@@ -132,7 +132,11 @@ export function DriveMap({ className, getPosition, getPath }: DriveMapProps) {
   return (
     <div
       ref={containerRef}
-      className={cn("h-full w-full bg-muted [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-[#0b1220]", className)}
+      className={cn(
+        "z-0 h-full w-full bg-muted",
+        "[&_.leaflet-container]:z-0 [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-[#0b1220]",
+        className,
+      )}
     />
   );
 }

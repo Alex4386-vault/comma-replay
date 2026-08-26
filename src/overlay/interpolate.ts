@@ -1,5 +1,13 @@
 import type { Timed } from "@/overlay/indexLog";
-import type { CarHud, CtrlHud, DmHud, OverlayFrame, OverlayLead, Vec3Path } from "@/overlay/types";
+import type {
+  CarHud,
+  CtrlHud,
+  DmHud,
+  GpsHud,
+  OverlayFrame,
+  OverlayLead,
+  Vec3Path,
+} from "@/overlay/types";
 
 export type Span<T> = { lo: T; hi: T; u: number };
 
@@ -182,4 +190,25 @@ export function interpCalib(
   const rpy = lerpRpy(span.lo.rpy, span.hi.rpy, span.u);
   if (!rpy) return span.lo;
   return { rpy, height: lerp(span.lo.height, span.hi.height, span.u) };
+}
+
+function lerpBearing(a: number | null, b: number | null, u: number): number | null {
+  if (a == null) return b;
+  if (b == null) return a;
+  // Shortest-path lerp on degrees.
+  let delta = ((((b - a) % 360) + 540) % 360) - 180;
+  return (a + delta * u + 360) % 360;
+}
+
+/** Time-based GPS lerp between samples (and across segment boundaries via absolute t). */
+export function interpGps(span: Span<GpsHud> | null, interpolate: boolean): GpsHud | null {
+  if (!span) return null;
+  if (!interpolate || span.u <= 0) return span.lo;
+  if (span.u >= 1) return span.hi;
+  return {
+    latitude: lerp(span.lo.latitude, span.hi.latitude, span.u),
+    longitude: lerp(span.lo.longitude, span.hi.longitude, span.u),
+    altitude: lerpNullable(span.lo.altitude, span.hi.altitude, span.u),
+    bearingDeg: lerpBearing(span.lo.bearingDeg, span.hi.bearingDeg, span.u),
+  };
 }

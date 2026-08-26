@@ -46,6 +46,10 @@ export class QcameraSource {
   private disposed = false;
   private syncTimer: number | null = null;
   private onPlayerError: ((...args: unknown[]) => void) | null = null;
+  /** Desired rate — reapplied after every segment attach (MSE resets to 1). */
+  private rate = 1;
+  /** Block timeupdate/sync from reporting 0 while a segment is loading/seeking. */
+  private suppressTime = false;
 
   constructor(
     source: DataSource,
@@ -86,15 +90,25 @@ export class QcameraSource {
 
   async seek(driveTime: number): Promise<void> {
     const { index, offset } = timeToSegment(driveTime, this.record.segmentPaths.length);
+    const wasPlaying = !this.video.paused;
     if (index !== this.segmentIndex) {
       await this.loadSegment(index, offset);
     } else {
-      this.video.currentTime = offset;
+      this.suppressTime = true;
+      try {
+        await this.seekWithinSegment(offset);
+      } finally {
+        this.suppressTime = false;
+      }
     }
-    this.events.onTime?.(index * SEGMENT_SECONDS + (this.video.currentTime || 0));
+    if (this.disposed) return;
+    this.applyRate();
+    this.events.onTime?.(this.driveTime());
+    if (wasPlaying) this.play();
   }
 
   play(): void {
+    this.applyRate();
     void this.video.play().catch((err) => {
       this.events.onError?.(err instanceof Error ? err.message : String(err));
     });
@@ -105,7 +119,14 @@ export class QcameraSource {
   }
 
   setRate(rate: number): void {
-    this.video.playbackRate = rate;
+    this.rate = rate > 0 && Number.isFinite(rate) ? rate : 1;
+    this.applyRate();
+  }
+
+  private applyRate(): void {
+    if (this.video.playbackRate !== this.rate) {
+      this.video.playbackRate = this.rate;
+    }
   }
 
   dispose(): void {
@@ -131,7 +152,8 @@ export class QcameraSource {
     this.stopSync();
     const tick = () => {
       if (this.disposed) return;
-      if (this.segmentIndex >= 0 && !this.video.paused) {
+      if (this.segmentIndex >= 0 && !this.video.paused && !this.suppressTime) {
+        this.applyRate();
         this.events.onTime?.(this.driveTime());
       }
       this.syncTimer = window.setTimeout(tick, 250);
@@ -147,7 +169,7 @@ export class QcameraSource {
   }
 
   private onTimeUpdate = () => {
-    if (this.disposed || this.video.paused) return;
+    if (this.disposed || this.video.paused || this.suppressTime) return;
     this.events.onTime?.(this.driveTime());
   };
 
@@ -155,7 +177,9 @@ export class QcameraSource {
     const next = this.segmentIndex + 1;
     if (next < this.record.segmentPaths.length) {
       void this.loadSegment(next, 0).then(() => {
-        if (!this.disposed) this.play();
+        if (this.disposed) return;
+        this.applyRate();
+        this.play();
       });
     } else {
       this.events.onEnded?.();
@@ -263,56 +287,102 @@ export class QcameraSource {
 
   private async loadSegment(index: number, offset: number): Promise<void> {
     const gen = ++this.loadGen;
+    this.suppressTime = true;
     this.destroyPlayer();
 
-    const slot = await this.resolveSlot(index);
-    if (this.disposed || gen !== this.loadGen) return;
+    try {
+      const slot = await this.resolveSlot(index);
+      if (this.disposed || gen !== this.loadGen) return;
 
-    // Workers break under Vite (webworkify). Keep transmux on main thread.
-    const player = mpegts.createPlayer(
-      {
-        type: "mpegts",
-        isLive: false,
-        hasAudio: false,
-        hasVideo: true,
-        url: slot.handle.url,
-      },
-      {
-        enableWorker: false,
-        enableWorkerForMSE: false,
-        enableStashBuffer: true,
-        stashInitialSize: 384,
-        lazyLoad: false,
-      },
-    ) as MpegtsPlayer;
+      // Workers break under Vite (webworkify). Keep transmux on main thread.
+      const player = mpegts.createPlayer(
+        {
+          type: "mpegts",
+          isLive: false,
+          hasAudio: false,
+          hasVideo: true,
+          url: slot.handle.url,
+        },
+        {
+          enableWorker: false,
+          enableWorkerForMSE: false,
+          enableStashBuffer: true,
+          stashInitialSize: 384,
+          lazyLoad: false,
+        },
+      ) as MpegtsPlayer;
 
-    this.onPlayerError = (...args: unknown[]) => {
-      const msg = args.map((a) => (a instanceof Error ? a.message : String(a))).join(" ");
-      console.error("[replay:qcamera] mpegts error", ...args);
-      this.events.onError?.(msg || "mpegts error");
-    };
-    player.on(mpegts.Events.ERROR, this.onPlayerError);
+      this.onPlayerError = (...args: unknown[]) => {
+        const msg = args.map((a) => (a instanceof Error ? a.message : String(a))).join(" ");
+        console.error("[replay:qcamera] mpegts error", ...args);
+        this.events.onError?.(msg || "mpegts error");
+      };
+      player.on(mpegts.Events.ERROR, this.onPlayerError);
 
-    player.attachMediaElement(this.video);
-    player.load();
-    this.player = player;
-    this.segmentIndex = index;
-    this.events.onSegment?.(index);
+      player.attachMediaElement(this.video);
+      player.load();
+      this.player = player;
+      this.segmentIndex = index;
+      this.events.onSegment?.(index);
 
-    this.trimSlots(index);
-    this.preloadNext(index);
+      this.trimSlots(index);
+      this.preloadNext(index);
 
-    await waitEvent(this.video, "loadedmetadata", 20_000);
-    if (this.disposed || gen !== this.loadGen) return;
+      await waitEvent(this.video, "loadedmetadata", 20_000);
+      if (this.disposed || gen !== this.loadGen) return;
 
-    const dur = Number.isFinite(this.video.duration) ? this.video.duration : SEGMENT_SECONDS;
-    this.video.currentTime = Math.min(Math.max(0, offset), Math.max(0, dur - 0.05));
+      // MSE attach resets playbackRate to 1.
+      this.applyRate();
+
+      if (this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+        try {
+          await waitEvent(this.video, "canplay", 15_000);
+        } catch {
+          /* seek anyway */
+        }
+        if (this.disposed || gen !== this.loadGen) return;
+      }
+
+      await this.seekWithinSegment(offset);
+      if (this.disposed || gen !== this.loadGen) return;
+
+      this.applyRate();
+      this.events.onTime?.(this.driveTime());
+    } finally {
+      if (gen === this.loadGen) this.suppressTime = false;
+    }
+  }
+
+  /** Seek inside the current media element; wait until currentTime sticks. */
+  private async seekWithinSegment(offset: number): Promise<void> {
+    const dur = Number.isFinite(this.video.duration) && this.video.duration > 0
+      ? this.video.duration
+      : SEGMENT_SECONDS;
+    const target = Math.min(Math.max(0, offset), Math.max(0, dur - 0.05));
+    if (Math.abs((this.video.currentTime || 0) - target) < 0.05) return;
+
+    this.video.currentTime = target;
+    try {
+      await waitSeeked(this.video, target, 8_000);
+    } catch {
+      // MSE sometimes ignores the first seek — retry once.
+      this.video.currentTime = target;
+      try {
+        await waitSeeked(this.video, target, 4_000);
+      } catch {
+        /* leave wherever the element landed */
+      }
+    }
   }
 }
 
 function waitEvent(el: HTMLMediaElement, type: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     if (type === "loadedmetadata" && el.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      resolve();
+      return;
+    }
+    if (type === "canplay" && el.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
       resolve();
       return;
     }
@@ -334,6 +404,35 @@ function waitEvent(el: HTMLMediaElement, type: string, timeoutMs: number): Promi
       el.removeEventListener("error", onErr);
     };
     el.addEventListener(type, onOk, { once: true });
+    el.addEventListener("error", onErr, { once: true });
+  });
+}
+
+function waitSeeked(el: HTMLMediaElement, target: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (Math.abs((el.currentTime || 0) - target) < 0.4) {
+      resolve();
+      return;
+    }
+    const onSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const onErr = () => {
+      cleanup();
+      reject(new Error("seek failed"));
+    };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      if (Math.abs((el.currentTime || 0) - target) < 1) resolve();
+      else reject(new Error("timeout waiting for seeked"));
+    }, timeoutMs);
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      el.removeEventListener("seeked", onSeeked);
+      el.removeEventListener("error", onErr);
+    };
+    el.addEventListener("seeked", onSeeked, { once: true });
     el.addEventListener("error", onErr, { once: true });
   });
 }

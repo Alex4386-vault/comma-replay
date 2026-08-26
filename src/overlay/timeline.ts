@@ -1,8 +1,8 @@
 import { FILE_NAMES } from "@/route/patterns";
 import type { DataSource } from "@/source/types";
 import type { RecordEntry } from "@/records";
-import { timeToSegment } from "@/playback/session";
-import { EMPTY_FRAME, type OverlayFrame } from "@/overlay/types";
+import { timeToSegment, SEGMENT_SECONDS } from "@/playback/session";
+import { EMPTY_FRAME, type GpsHud, type OverlayFrame } from "@/overlay/types";
 import type { OverlaySegment, Timed } from "@/overlay/indexLog";
 import { indexOverlayOffMain } from "@/overlay/overlayWorker";
 import {
@@ -10,6 +10,7 @@ import {
   interpCar,
   interpCtrl,
   interpDm,
+  interpGps,
   interpLeads,
   interpModel,
   spanAt,
@@ -136,7 +137,7 @@ export class CerealTimeline {
     const calib = interpCalib(calibSpan, interpolate);
     const radar = interpLeads(spanAt(seg.radarLeads, offset), interpolate);
     const map = spanAt(seg.map, offset)?.lo;
-    const gps = spanAt(seg.gps, offset)?.lo;
+    const gps = this.gpsAt(driveTime, interpolate);
     const dmSpan = spanAt(seg.dm, offset);
     const dm = interpDm(dmSpan, interpolate);
     if (calib) {
@@ -216,6 +217,31 @@ export class CerealTimeline {
     };
     this.lastFrame = frame;
     return frame;
+  }
+
+  /**
+   * GPS at drive time, lerped between samples. Looks at neighboring cached
+   * segments so gaps between sparse fixes (and segment boundaries) stay smooth.
+   */
+  private gpsAt(driveTime: number, interpolate: boolean): GpsHud | null {
+    const n = this.record.segmentPaths.length;
+    const { index } = timeToSegment(driveTime, n);
+    const samples: Timed<GpsHud>[] = [];
+    for (let i = Math.max(0, index - 1); i <= Math.min(n - 1, index + 1); i++) {
+      const seg = this.cache.get(i);
+      if (!seg) continue;
+      const base = i * SEGMENT_SECONDS;
+      for (const s of seg.gps) samples.push({ t: base + s.t, value: s.value });
+    }
+    if (samples.length === 0) {
+      for (const [i, seg] of this.cache) {
+        const base = i * SEGMENT_SECONDS;
+        for (const s of seg.gps) samples.push({ t: base + s.t, value: s.value });
+      }
+    }
+    if (samples.length === 0) return null;
+    samples.sort((a, b) => a.t - b.t);
+    return interpGps(spanAt(samples, driveTime), interpolate);
   }
 
   /** Lat/lon track from cached segments, in drive order (for the map polyline). */
