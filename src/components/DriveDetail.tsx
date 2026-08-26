@@ -46,6 +46,7 @@ import { CerealTimeline } from "@/overlay/timeline";
 import { PAINTERS } from "@/overlay/painters";
 import { contentRect } from "@/overlay/project";
 import { hudLine, recordPaint } from "@/overlay/perf";
+import { DriveMap } from "@/components/DriveMap";
 import { cn } from "@/lib/utils";
 
 const RATES = [0.5, 1, 2, 4] as const;
@@ -138,9 +139,10 @@ export function DriveDetail({
     sourceRef.current?.setRate(session.rate);
   }, [session.rate]);
 
-  // Warm overlay cache when a painter is selected; rAF keeps the lookahead filled.
+  // Warm cereal index for overlay paint and/or map GPS.
   useEffect(() => {
-    if (session.overlay === "none") return;
+    const needLogs = session.overlay !== "none" || settings.showMap;
+    if (!needLogs) return;
     const timeline = timelineRef.current;
     if (!timeline) return;
     const { index } = timeToSegment(sessionRef.current.t, record.segmentPaths.length);
@@ -156,7 +158,22 @@ export function DriveDetail({
         console.error("[replay] overlay log failed", err);
         setOverlayLoading((on) => (on ? false : on));
       });
-  }, [session.overlay, record.segmentPaths.length]);
+  }, [session.overlay, settings.showMap, record.segmentPaths.length]);
+
+  // When map is on without an overlay painter, still prefetch GPS segments.
+  useEffect(() => {
+    if (!settings.showMap || session.overlay !== "none") return;
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const timeline = timelineRef.current;
+      if (!timeline) return;
+      const { index } = timeToSegment(sessionRef.current.t, record.segmentPaths.length);
+      timeline.prefetchWindow(index, sessionRef.current.rate >= 2 ? 3 : 2);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [settings.showMap, session.overlay, record.segmentPaths.length]);
 
   useEffect(() => {
     if (session.overlay === "none") return;
@@ -273,6 +290,7 @@ export function DriveDetail({
 
   const title = `${summary.dateLabel}  ${summary.timeRange}`;
   const showOverlay = session.overlay !== "none";
+  const showMap = settings.showMap;
   const { index: segmentIndex } = timeToSegment(session.t, record.segmentPaths.length);
   const segmentNum = record.segments[segmentIndex] ?? segmentIndex;
   const segmentCount = record.segments.length;
@@ -341,58 +359,85 @@ export function DriveDetail({
         </DropdownMenu>
       </div>
 
-      <div className="relative isolate flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg bg-black">
-        <video
-          ref={videoRef}
-          className={cn(
-            "absolute inset-0 z-0 h-full w-full object-contain",
-            session.quality === "fcamera" && "hidden",
-          )}
-          playsInline
-          muted
-        />
-        <canvas
-          ref={frameCanvasRef}
-          className={cn(
-            "absolute inset-0 z-0 h-full w-full object-contain",
-            session.quality !== "fcamera" && "hidden",
-          )}
-        />
-        <canvas
-          ref={canvasRef}
-          className={cn(
-            "pointer-events-none absolute inset-0 z-10 h-full w-full",
-            !showOverlay && "hidden",
-          )}
-        />
-        {loading ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-            <Button type="button" disabled variant="secondary">
-              <Spinner data-icon="inline-start" />
-              Loading qcamera…
-            </Button>
-          </div>
-        ) : null}
-        {overlayLoading && showOverlay ? (
-          <div className="absolute top-3 right-3 z-20 rounded-md bg-black/70 px-2 py-1 text-xs text-white">
-            Loading overlay…
-          </div>
-        ) : null}
-        {showOverlay && settings.overlayMetrics ? (
-          <div
-            ref={perfHudRef}
-            className="pointer-events-none absolute bottom-2 left-2 z-20 max-w-[calc(100%-1rem)] truncate rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight text-white/90"
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 gap-2",
+          showMap ? "flex-col lg:flex-row" : "flex-col",
+        )}
+      >
+        <div className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg bg-black">
+          <video
+            ref={videoRef}
+            className={cn(
+              "absolute inset-0 z-0 h-full w-full object-contain",
+              session.quality === "fcamera" && "hidden",
+            )}
+            playsInline
+            muted
           />
-        ) : null}
-        {error ? (
-          <Alert
-            variant="destructive"
-            className="absolute inset-x-3 bottom-3 z-20 border-destructive/40 bg-background/95"
-          >
-            <CircleAlertIcon />
-            <AlertTitle>Playback error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <canvas
+            ref={frameCanvasRef}
+            className={cn(
+              "absolute inset-0 z-0 h-full w-full object-contain",
+              session.quality !== "fcamera" && "hidden",
+            )}
+          />
+          <canvas
+            ref={canvasRef}
+            className={cn(
+              "pointer-events-none absolute inset-0 z-10 h-full w-full",
+              !showOverlay && "hidden",
+            )}
+          />
+          {loading ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+              <Button type="button" disabled variant="secondary">
+                <Spinner data-icon="inline-start" />
+                Loading qcamera…
+              </Button>
+            </div>
+          ) : null}
+          {overlayLoading && (showOverlay || showMap) ? (
+            <div className="absolute top-3 right-3 z-20 rounded-md bg-black/70 px-2 py-1 text-xs text-white">
+              Loading {showOverlay ? "overlay" : "map"}…
+            </div>
+          ) : null}
+          {showOverlay && settings.overlayMetrics ? (
+            <div
+              ref={perfHudRef}
+              className="pointer-events-none absolute bottom-2 left-2 z-20 max-w-[calc(100%-1rem)] truncate rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight text-white/90"
+            />
+          ) : null}
+          {error ? (
+            <Alert
+              variant="destructive"
+              className="absolute inset-x-3 bottom-3 z-20 border-destructive/40 bg-background/95"
+            >
+              <CircleAlertIcon />
+              <AlertTitle>Playback error</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
+
+        {showMap ? (
+          <div className="relative min-h-[220px] min-w-0 flex-1 overflow-hidden rounded-lg border lg:min-h-0">
+            <DriveMap
+              getPosition={() => {
+                const frame = timelineRef.current?.stateAt(
+                  sessionRef.current.t,
+                  !settings.disableOverlayInterpolation,
+                );
+                if (frame?.latitude == null || frame?.longitude == null) return null;
+                return {
+                  lat: frame.latitude,
+                  lon: frame.longitude,
+                  bearingDeg: frame.bearingDeg,
+                };
+              }}
+              getPath={() => timelineRef.current?.gpsPath() ?? []}
+            />
+          </div>
         ) : null}
       </div>
 

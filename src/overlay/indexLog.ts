@@ -40,6 +40,7 @@ export type OverlaySegment = {
 const PATH_DRAW_N = 17;
 const MODEL_MIN_DT = 0.08;
 const CAR_MIN_DT = 0.05;
+const GPS_MIN_DT = 0.5;
 const RADAR_MIN_DT = 0.1;
 
 /** T_IDXS from modeld: 33 points, t in [0, 10], quadratic spacing. */
@@ -390,11 +391,42 @@ function applyControlsState(event: LogEvent, ctrl: CtrlHud): void {
 function extractGps(event: LogEvent): GpsHud | null {
   try {
     const which = event.which();
-    let g: { getAltitude(): number; getHorizontalAccuracy?: () => number } | null = null;
+    let g: {
+      getLatitude(): number;
+      getLongitude(): number;
+      getAltitude(): number;
+      getBearingDeg?: () => number;
+      getHasFix?: () => boolean;
+    } | null = null;
     if (which === Event_Which.GPS_LOCATION_EXTERNAL) g = event.getGpsLocationExternal();
     else if (which === Event_Which.GPS_LOCATION) g = event.getGpsLocation();
     if (!g) return null;
-    return { altitude: g.getAltitude() };
+    const latitude = g.getLatitude();
+    const longitude = g.getLongitude();
+    if (!(Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180)) return null;
+    if (latitude === 0 && longitude === 0) return null;
+    try {
+      if (g.getHasFix && !g.getHasFix()) {
+        if (Math.abs(latitude) < 1e-5 && Math.abs(longitude) < 1e-5) return null;
+      }
+    } catch {
+      /* optional */
+    }
+    let bearingDeg: number | null = null;
+    try {
+      if (g.getBearingDeg) {
+        const b = g.getBearingDeg();
+        if (Number.isFinite(b)) bearingDeg = b;
+      }
+    } catch {
+      /* optional */
+    }
+    return {
+      latitude,
+      longitude,
+      altitude: g.getAltitude(),
+      bearingDeg,
+    };
   } catch {
     return null;
   }
@@ -536,6 +568,7 @@ export async function indexOverlayBytes(
   let lastCar = -1;
   let lastRadar = -1;
   let lastCtrl = -1;
+  let lastGps = -1;
   const ctrlState: CtrlHud = {
     curvature: 0,
     desiredCurvature: 0,
@@ -671,8 +704,13 @@ export async function indexOverlayBytes(
           /* optional */
         }
       } else if (which === Event_Which.GPS_LOCATION_EXTERNAL || which === Event_Which.GPS_LOCATION) {
-        const g = extractGps(event);
-        if (g) gps.push({ t, value: g });
+        if (keep(lastGps, t, GPS_MIN_DT)) {
+          const g = extractGps(event);
+          if (g) {
+            gps.push({ t, value: g });
+            lastGps = t;
+          }
+        }
       } else if (which === Event_Which.DRIVER_STATE_V2) {
         applyDriverState(event, dmRHD, faceState);
       } else if (which === Event_Which.DRIVER_MONITORING_STATE) {

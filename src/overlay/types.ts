@@ -43,9 +43,12 @@ export type CtrlHud = {
   latAccelFactor: number;
 };
 
-/** GPS-derived developer UI fields. */
+/** GPS-derived developer UI fields + map position. */
 export type GpsHud = {
+  latitude: number;
+  longitude: number;
   altitude: number | null;
+  bearingDeg: number | null;
 };
 
 /** Driver monitoring (mici DMoji + 3X face). */
@@ -141,6 +144,9 @@ export type OverlayFrame = {
   /** Model confidence in [0,1] for mici confidence ball. null when unknown. */
   confidence: number | null;
   altitude: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  bearingDeg: number | null;
   // Driver monitoring (mici DMoji + 3X face).
   dmActive: boolean;
   dmFaceDetected: boolean;
@@ -205,6 +211,9 @@ export const EMPTY_FRAME: OverlayFrame = {
   latAccelFactor: 0,
   confidence: null,
   altitude: null,
+  latitude: null,
+  longitude: null,
+  bearingDeg: null,
   dmActive: false,
   dmFaceDetected: false,
   dmIsRHD: false,

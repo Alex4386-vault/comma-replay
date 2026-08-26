@@ -18,6 +18,7 @@ export type { SunnypilotOverlaySettings };
 export type AppSettings = {
   reverseGeocode: boolean;
   useMetric: boolean;
+  showMap: boolean;
   overlayMetrics: boolean;
   disableOverlayInterpolation: boolean;
   sunnypilotOverlay: SunnypilotOverlaySettings;
@@ -28,6 +29,7 @@ const STORAGE_KEY = "comma-replay.settings";
 const DEFAULT_SETTINGS: AppSettings = {
   reverseGeocode: false,
   useMetric: true,
+  showMap: false,
   overlayMetrics: false,
   disableOverlayInterpolation: false,
   sunnypilotOverlay: { ...DEFAULT_SUNNYPILOT_OVERLAY },
@@ -41,6 +43,7 @@ function loadSettings(): AppSettings {
     return {
       reverseGeocode: Boolean(parsed.reverseGeocode),
       useMetric: parsed.useMetric ?? DEFAULT_SETTINGS.useMetric,
+      showMap: Boolean(parsed.showMap),
       overlayMetrics: Boolean(parsed.overlayMetrics),
       disableOverlayInterpolation: Boolean(parsed.disableOverlayInterpolation),
       sunnypilotOverlay: mergeSunnypilotOverlay(parsed.sunnypilotOverlay),

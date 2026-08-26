@@ -166,6 +166,20 @@ export function AccountMenu({ user, onLogout }: AccountMenuProps) {
                 />
               </Field>
 
+              <Field orientation="horizontal">
+                <FieldContent>
+                  <FieldLabel htmlFor="setting-map">Show map</FieldLabel>
+                  <FieldDescription>
+                    OpenStreetMap next to the video with the drive path and live car position.
+                  </FieldDescription>
+                </FieldContent>
+                <Switch
+                  id="setting-map"
+                  checked={draft.showMap}
+                  onCheckedChange={(checked) => setDraft((d) => ({ ...d, showMap: checked }))}
+                />
+              </Field>
+
               <div className="flex flex-col gap-3 border-t pt-4">
                 <div>
                   <h2 className="text-sm font-medium">sunnypilot overlay settings</h2>

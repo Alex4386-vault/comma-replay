@@ -202,6 +202,9 @@ export class CerealTimeline {
       latAccelFactor: ctrl?.latAccelFactor ?? this.lastFrame?.latAccelFactor ?? 0,
       confidence: model?.confidence ?? this.lastFrame?.confidence ?? null,
       altitude: gps?.altitude ?? this.lastFrame?.altitude ?? null,
+      latitude: gps?.latitude ?? this.lastFrame?.latitude ?? null,
+      longitude: gps?.longitude ?? this.lastFrame?.longitude ?? null,
+      bearingDeg: gps?.bearingDeg ?? this.lastFrame?.bearingDeg ?? null,
       dmActive: dm?.active ?? false,
       dmFaceDetected: dm?.faceDetected ?? false,
       dmIsRHD: dm?.isRHD ?? this.lastFrame?.dmIsRHD ?? false,
@@ -213,6 +216,23 @@ export class CerealTimeline {
     };
     this.lastFrame = frame;
     return frame;
+  }
+
+  /** Lat/lon track from cached segments, in drive order (for the map polyline). */
+  gpsPath(): [number, number][] {
+    const out: [number, number][] = [];
+    const n = this.record.segmentPaths.length;
+    for (let i = 0; i < n; i++) {
+      const seg = this.cache.get(i);
+      if (!seg) continue;
+      for (const sample of seg.gps) {
+        const { latitude, longitude } = sample.value;
+        if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+          out.push([latitude, longitude]);
+        }
+      }
+    }
+    return out;
   }
 
   private evict(): void {
