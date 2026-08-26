@@ -372,10 +372,10 @@ export function DriveDetail({
       <div
         className={cn(
           "flex min-h-0 flex-1 gap-2",
-          showMap ? "flex-col lg:flex-row lg:items-center" : "flex-col",
+          showMap ? "flex-row items-stretch" : "flex-col",
         )}
       >
-        <div className="relative isolate z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg bg-black">
+        <div className="relative isolate z-0 min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg bg-black">
           <video
             ref={videoRef}
             className={cn(
@@ -431,24 +431,26 @@ export function DriveDetail({
         </div>
 
         {showMap ? (
-          <div className="relative z-0 aspect-square w-full max-w-[320px] shrink-0 self-center overflow-hidden rounded-lg border lg:h-[min(100%,320px)] lg:w-auto lg:max-w-none">
-            <DriveMap
-              className="absolute inset-0"
-              getPosition={() => {
-                const frame = timelineRef.current?.stateAt(
-                  sessionRef.current.t,
-                  !settings.disableOverlayInterpolation,
-                );
-                if (frame?.latitude == null || frame?.longitude == null) return null;
-                return {
-                  lat: frame.latitude,
-                  lon: frame.longitude,
-                  bearingDeg: frame.bearingDeg,
-                };
-              }}
-              getPath={() => timelineRef.current?.gpsPath() ?? []}
-            />
-          </div>
+          <aside className="flex w-[min(320px,28vw)] shrink-0 flex-col justify-center">
+            <div className="relative aspect-square w-full overflow-hidden rounded-lg border">
+              <DriveMap
+                className="absolute inset-0"
+                getPosition={() => {
+                  const frame = timelineRef.current?.stateAt(
+                    sessionRef.current.t,
+                    !settings.disableOverlayInterpolation,
+                  );
+                  if (frame?.latitude == null || frame?.longitude == null) return null;
+                  return {
+                    lat: frame.latitude,
+                    lon: frame.longitude,
+                    bearingDeg: frame.bearingDeg,
+                  };
+                }}
+                getPath={() => timelineRef.current?.gpsPath() ?? []}
+              />
+            </div>
+          </aside>
         ) : null}
       </div>
 
