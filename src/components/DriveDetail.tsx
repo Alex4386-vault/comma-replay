@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
+  ChevronUpIcon,
+  CircleAlertIcon,
   PauseIcon,
   PlayIcon,
   RotateCcwIcon,
@@ -8,15 +10,22 @@ import {
   SkipBackIcon,
   SkipForwardIcon,
 } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { QcameraSource } from "@/playback/qcameraSource";
 import { FcameraSource } from "@/playback/fcameraSource";
@@ -285,53 +294,49 @@ export function DriveDetail({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>Quality</DropdownMenuLabel>
-            <DropdownMenuCheckboxItem
-              checked={session.quality === "qcamera"}
-              onCheckedChange={() => setQuality("qcamera")}
-            >
-              Standard (qcamera)
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={session.quality === "fcamera"}
-              onCheckedChange={() => setQuality("fcamera")}
-            >
-              High quality (fcamera)
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Overlay</DropdownMenuLabel>
-            {(
-              [
-                ["none", "None"],
-                ["comma3x-stock", "comma 3X stock"],
-                ["comma3x-sunnypilot", "comma 3X sunnypilot"],
-                ["comma4", "comma 4"],
-              ] as const
-            ).map(([id, label]) => (
-              <DropdownMenuCheckboxItem
-                key={id}
-                checked={session.overlay === id}
-                onCheckedChange={() => setOverlay(id)}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Quality</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={session.quality}
+                onValueChange={(value) => setQuality(value as PlaybackQuality)}
               >
-                {label}
-              </DropdownMenuCheckboxItem>
-            ))}
+                <DropdownMenuRadioItem value="qcamera">Standard (qcamera)</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="fcamera">High quality (fcamera)</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel>Developer</DropdownMenuLabel>
-            <DropdownMenuCheckboxItem
-              checked={settings.overlayMetrics}
-              onCheckedChange={(checked) => setSettings({ overlayMetrics: Boolean(checked) })}
-            >
-              Overlay metrics
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={settings.disableOverlayInterpolation}
-              onCheckedChange={(checked) =>
-                setSettings({ disableOverlayInterpolation: Boolean(checked) })
-              }
-            >
-              Disable interpolation
-            </DropdownMenuCheckboxItem>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Overlay</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={session.overlay}
+                onValueChange={(value) => setOverlay(value as OverlayStyle)}
+              >
+                <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="comma3x-stock">comma 3X stock</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="comma3x-sunnypilot">
+                  comma 3X sunnypilot
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="comma4">comma 4</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Developer</DropdownMenuLabel>
+              <DropdownMenuCheckboxItem
+                checked={settings.overlayMetrics}
+                onCheckedChange={(checked) => setSettings({ overlayMetrics: Boolean(checked) })}
+              >
+                Overlay metrics
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={settings.disableOverlayInterpolation}
+                onCheckedChange={(checked) =>
+                  setSettings({ disableOverlayInterpolation: Boolean(checked) })
+                }
+              >
+                Disable interpolation
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -380,91 +385,112 @@ export function DriveDetail({
           />
         ) : null}
         {error ? (
-          <div className="absolute inset-x-0 bottom-0 bg-destructive/90 px-3 py-2 text-sm text-destructive-foreground">
-            {error}
-          </div>
+          <Alert
+            variant="destructive"
+            className="absolute inset-x-3 bottom-3 z-20 border-destructive/40 bg-background/95"
+          >
+            <CircleAlertIcon />
+            <AlertTitle>Playback error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : null}
       </div>
 
-      <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-        <input
-          type="range"
+      <div className="flex flex-col gap-3 rounded-lg border bg-card px-3 py-3">
+        <Slider
           min={0}
-          max={session.duration}
+          max={Math.max(session.duration, 0.01)}
           step={0.05}
-          value={clampTime(session.t, session.duration)}
-          onChange={(e) => onScrubInput(Number(e.target.value))}
-          onMouseUp={(e) => void onScrubCommit(Number((e.target as HTMLInputElement).value))}
-          onTouchEnd={(e) =>
-            void onScrubCommit(Number((e.target as HTMLInputElement).value))
-          }
-          onKeyUp={(e) => void onScrubCommit(Number((e.target as HTMLInputElement).value))}
-          className="w-full accent-sky-500"
+          value={[clampTime(session.t, session.duration)]}
+          disabled={loading || session.duration <= 0}
+          onValueChange={(values) => onScrubInput(values[0] ?? 0)}
+          onValueCommit={(values) => void onScrubCommit(values[0] ?? 0)}
           aria-label="Scrub timeline"
         />
         <div className="flex flex-wrap items-center justify-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => void seekTo(session.t - 10)}
-            title="Back 10s"
-          >
-            <SkipBackIcon />
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="icon"
-            onClick={togglePlay}
-            disabled={loading || !!error}
-            title={session.playing ? "Pause" : "Play"}
-          >
-            {session.playing ? <PauseIcon /> : <PlayIcon />}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => void seekTo(session.t + 10)}
-            title="Forward 10s"
-          >
-            <SkipForwardIcon />
-          </Button>
+          <ButtonGroup>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              onClick={() => void seekTo(session.t - 10)}
+              aria-label="Back 10s"
+            >
+              <SkipBackIcon />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={togglePlay}
+              disabled={loading || !!error}
+              aria-label={session.playing ? "Pause" : "Play"}
+            >
+              {session.playing ? <PauseIcon /> : <PlayIcon />}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              onClick={() => void seekTo(session.t + 10)}
+              aria-label="Forward 10s"
+            >
+              <SkipForwardIcon />
+            </Button>
+          </ButtonGroup>
+
           <span className="min-w-28 text-center font-mono text-sm tabular-nums">
             {formatDriveClock(session.t)}
             <span className="text-muted-foreground"> / {formatDriveClock(session.duration)}</span>
           </span>
-          <span
-            className="rounded-md bg-muted px-2 py-0.5 font-mono text-xs tabular-nums text-muted-foreground"
+
+          <Badge
+            variant="secondary"
+            className="font-mono tabular-nums"
             title={record.segmentPaths[segmentIndex] ?? undefined}
           >
             seg {segmentNum}
-            <span className="text-muted-foreground/70">
-              {" "}
+            <span className="text-muted-foreground">
               · {segmentIndex + 1}/{segmentCount}
             </span>
-          </span>
-          <div className="flex items-center gap-1">
-            {RATES.map((r) => (
+          </Badge>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
-                key={r}
                 type="button"
-                size="xs"
-                variant={session.rate === r ? "secondary" : "ghost"}
-                className={cn(session.rate === r && "text-sky-400")}
-                onClick={() => patch({ rate: r })}
+                variant="outline"
+                size="sm"
+                className="min-w-16 tabular-nums"
+                aria-label="Playback speed"
               >
-                {r}x
+                {session.rate}x
+                <ChevronUpIcon data-icon="inline-end" />
               </Button>
-            ))}
-          </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="center" className="w-auto min-w-28">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Speed</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={String(session.rate)}
+                  onValueChange={(value) => patch({ rate: Number(value) })}
+                >
+                  {RATES.map((rate) => (
+                    <DropdownMenuRadioItem key={rate} value={String(rate)}>
+                      {rate}x
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="icon-sm"
             onClick={() => void seekTo(0)}
-            title="Restart"
+            aria-label="Restart"
           >
             <RotateCcwIcon />
           </Button>
