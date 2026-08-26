@@ -71,7 +71,7 @@ export function DriveDetail({
   const videoRef = useRef<HTMLVideoElement>(null);
   const frameCanvasRef = useRef<HTMLCanvasElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoPaneRef = useRef<HTMLDivElement>(null);
+  const mediaRowRef = useRef<HTMLDivElement>(null);
   const perfHudRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<QcameraSource | FcameraSource | null>(null);
   const timelineRef = useRef<CerealTimeline | null>(null);
@@ -84,7 +84,7 @@ export function DriveDetail({
   const [loading, setLoading] = useState(true);
   const [overlayLoading, setOverlayLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Map side length (= letterboxed video frame height). */
+  /** Stable square map size (matches letterboxed video height without layout feedback). */
   const [mapSize, setMapSize] = useState(0);
   const scrubbing = useRef(false);
   const loadedSeg = useRef(-1);
@@ -142,32 +142,40 @@ export function DriveDetail({
     sourceRef.current?.setRate(session.rate);
   }, [session.rate]);
 
-  // Keep map square equal to the letterboxed video frame height.
+  // Map square ≈ letterboxed video height. Solved in closed form from the row
+  // size so changing map width cannot re-trigger measurement (no vibration).
   useEffect(() => {
     if (!settings.showMap) {
       setMapSize(0);
       return;
     }
-    const pane = videoPaneRef.current;
-    if (!pane) return;
+    const row = mediaRowRef.current;
+    if (!row) return;
 
+    const GAP = 8; // gap-2
     const measure = () => {
-      const cw = pane.clientWidth;
-      const ch = pane.clientHeight;
-      if (cw < 8 || ch < 8) return;
+      const rowW = row.clientWidth;
+      const rowH = row.clientHeight;
+      if (rowW < 16 || rowH < 16) return;
       const video = videoRef.current;
       const fc = frameCanvasRef.current;
       const usingFcamera = sessionRef.current.quality === "fcamera";
       const vw = (usingFcamera ? fc?.width : video?.videoWidth) || 1164;
       const vh = (usingFcamera ? fc?.height : video?.videoHeight) || 874;
-      const { h } = contentRect(cw, ch, vw, vh);
-      const next = Math.max(0, Math.floor(h));
-      setMapSize((prev) => (prev === next ? prev : next));
+      // With map side M and video pane (rowW - GAP - M), letterboxed height is
+      // min(rowH, (rowW - GAP - M) * vh / vw). Setting M equal to that height:
+      // M = min(rowH, rowW_usable * vh / (vw + vh)).
+      const usable = Math.max(0, rowW - GAP);
+      const next = Math.max(
+        0,
+        Math.floor(Math.min(rowH, (usable * vh) / (vw + vh))),
+      );
+      setMapSize((prev) => (Math.abs(prev - next) <= 1 ? prev : next));
     };
 
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(pane);
+    ro.observe(row);
     const video = videoRef.current;
     video?.addEventListener("loadedmetadata", measure);
     return () => {
@@ -216,8 +224,13 @@ export function DriveDetail({
     if (session.overlay === "none") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
+    // Do not use desynchronized: it often forces an opaque backing store so
+    // clearRect paints black over the video instead of staying transparent.
+    const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
+    if (ctx.getContextAttributes && ctx.getContextAttributes().alpha === false) {
+      console.warn("[replay] overlay canvas is opaque; HUD will cover video");
+    }
 
     const metrics = settings.overlayMetrics;
     let raf = 0;
@@ -241,12 +254,16 @@ export function DriveDetail({
       const dpr = window.devicePixelRatio || 1;
       const pw = Math.floor(w * dpr);
       const ph = Math.floor(h * dpr);
-      if (canvas.width !== pw || canvas.height !== ph) {
+      // Ignore 1px layout noise so the backing store isn't constantly reset.
+      if (Math.abs(canvas.width - pw) > 1 || Math.abs(canvas.height - ph) > 1) {
         canvas.width = pw;
         canvas.height = ph;
       }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
       // Video dims come from the <video> (qcamera) or the decoded frame canvas
       // (fcamera), so the overlay letterbox matches the shown image.
       const fc = frameCanvasRef.current;
@@ -407,15 +424,13 @@ export function DriveDetail({
       </div>
 
       <div
+        ref={mediaRowRef}
         className={cn(
           "flex min-h-0 flex-1 gap-2",
           showMap ? "flex-row items-center" : "flex-col",
         )}
       >
-        <div
-          ref={videoPaneRef}
-          className="relative isolate z-0 min-h-0 min-w-0 flex-1 self-stretch overflow-hidden rounded-lg bg-black"
-        >
+        <div className="relative isolate z-0 min-h-0 min-w-0 flex-1 self-stretch overflow-hidden rounded-lg bg-black">
           <video
             ref={videoRef}
             className={cn(
@@ -435,7 +450,7 @@ export function DriveDetail({
           <canvas
             ref={canvasRef}
             className={cn(
-              "pointer-events-none absolute inset-0 z-10 h-full w-full",
+              "pointer-events-none absolute inset-0 z-10 h-full w-full bg-transparent",
               !showOverlay && "hidden",
             )}
           />

@@ -51,11 +51,13 @@ function tintedCone(size: number, r: number, g: number, b: number): HTMLCanvasEl
   tintCanvas.height = s;
   const tctx = tintCanvas.getContext("2d");
   if (!tctx) return null;
+  tctx.globalCompositeOperation = "source-over";
   tctx.clearRect(0, 0, s, s);
   tctx.drawImage(dmConeImg, 0, 0, s, s);
   tctx.globalCompositeOperation = "source-in";
   tctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
   tctx.fillRect(0, 0, s, s);
+  tctx.globalCompositeOperation = "source-over";
   return tintCanvas;
 }
 
