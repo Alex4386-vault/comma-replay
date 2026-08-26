@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import L from "leaflet";
+import { LocateFixedIcon } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export type MapPosition = {
@@ -22,8 +24,8 @@ const TILE_ATTR =
 
 /**
  * Leaflet OSM map (dark Carto tiles) with drive path + live car marker.
- * Position/path are polled each frame from callbacks so playback stays smooth
- * without React re-renders.
+ * Auto-follows the car until the user pans/zooms; a recenter button returns
+ * to the car (car-GPS style).
  */
 export function DriveMap({ className, getPosition, getPath }: DriveMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -32,10 +34,28 @@ export function DriveMap({ className, getPosition, getPath }: DriveMapProps) {
   const markerRef = useRef<L.CircleMarker | null>(null);
   const fittedRef = useRef(false);
   const pathLenRef = useRef(0);
+  const followRef = useRef(true);
+  const [following, setFollowing] = useState(true);
   const getPositionRef = useRef(getPosition);
   const getPathRef = useRef(getPath);
   getPositionRef.current = getPosition;
   getPathRef.current = getPath;
+
+  const setFollow = useCallback((on: boolean) => {
+    followRef.current = on;
+    setFollowing(on);
+  }, []);
+
+  const recenter = useCallback(() => {
+    const map = mapRef.current;
+    const pos = getPositionRef.current();
+    if (!map || !pos) {
+      setFollow(true);
+      return;
+    }
+    setFollow(true);
+    map.panTo([pos.lat, pos.lon], { animate: true, duration: 0.35 });
+  }, [setFollow]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -75,12 +95,22 @@ export function DriveMap({ className, getPosition, getPath }: DriveMapProps) {
     markerRef.current = marker;
     fittedRef.current = false;
     pathLenRef.current = 0;
+    followRef.current = true;
+    setFollowing(true);
+
+    const unfollow = () => {
+      // Ignore the initial fitBounds; only user pans/zooms break follow.
+      if (!fittedRef.current || !followRef.current) return;
+      followRef.current = false;
+      setFollowing(false);
+    };
+    map.on("dragstart", unfollow);
+    map.on("zoomstart", unfollow);
 
     const ro = new ResizeObserver(() => {
       map.invalidateSize({ animate: false });
     });
     ro.observe(el);
-    // Layout may settle after flex row mounts.
     requestAnimationFrame(() => map.invalidateSize({ animate: false }));
 
     let raf = 0;
@@ -113,7 +143,7 @@ export function DriveMap({ className, getPosition, getPath }: DriveMapProps) {
       const ll: L.LatLngExpression = [pos.lat, pos.lon];
       mark.setLatLng(ll);
       mark.setStyle({ opacity: 1, fillOpacity: 1 });
-      if (!m.getBounds().pad(-0.2).contains(ll)) {
+      if (followRef.current && !m.getBounds().pad(-0.2).contains(ll)) {
         m.panTo(ll, { animate: true, duration: 0.35 });
       }
     };
@@ -122,6 +152,8 @@ export function DriveMap({ className, getPosition, getPath }: DriveMapProps) {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      map.off("dragstart", unfollow);
+      map.off("zoomstart", unfollow);
       map.remove();
       mapRef.current = null;
       pathRef.current = null;
@@ -130,13 +162,27 @@ export function DriveMap({ className, getPosition, getPath }: DriveMapProps) {
   }, []);
 
   return (
-    <div
-      ref={containerRef}
-      className={cn(
-        "z-0 h-full w-full bg-muted",
-        "[&_.leaflet-container]:z-0 [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-[#0b1220]",
-        className,
-      )}
-    />
+    <div className={cn("relative isolate z-0 h-full w-full", className)}>
+      <div
+        ref={containerRef}
+        className={cn(
+          "absolute inset-0 bg-muted",
+          "[&_.leaflet-container]:z-0 [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-[#0b1220]",
+        )}
+      />
+      {!following ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon-sm"
+          className="absolute right-3 bottom-10 z-[500] shadow-md"
+          title="Return to car"
+          aria-label="Return to car"
+          onClick={recenter}
+        >
+          <LocateFixedIcon />
+        </Button>
+      ) : null}
+    </div>
   );
 }

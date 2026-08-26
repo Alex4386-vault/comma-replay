@@ -71,6 +71,7 @@ export function DriveDetail({
   const videoRef = useRef<HTMLVideoElement>(null);
   const frameCanvasRef = useRef<HTMLCanvasElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoPaneRef = useRef<HTMLDivElement>(null);
   const perfHudRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<QcameraSource | FcameraSource | null>(null);
   const timelineRef = useRef<CerealTimeline | null>(null);
@@ -83,6 +84,8 @@ export function DriveDetail({
   const [loading, setLoading] = useState(true);
   const [overlayLoading, setOverlayLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Map side length (= letterboxed video frame height). */
+  const [mapSize, setMapSize] = useState(0);
   const scrubbing = useRef(false);
   const loadedSeg = useRef(-1);
 
@@ -138,6 +141,40 @@ export function DriveDetail({
   useEffect(() => {
     sourceRef.current?.setRate(session.rate);
   }, [session.rate]);
+
+  // Keep map square equal to the letterboxed video frame height.
+  useEffect(() => {
+    if (!settings.showMap) {
+      setMapSize(0);
+      return;
+    }
+    const pane = videoPaneRef.current;
+    if (!pane) return;
+
+    const measure = () => {
+      const cw = pane.clientWidth;
+      const ch = pane.clientHeight;
+      if (cw < 8 || ch < 8) return;
+      const video = videoRef.current;
+      const fc = frameCanvasRef.current;
+      const usingFcamera = sessionRef.current.quality === "fcamera";
+      const vw = (usingFcamera ? fc?.width : video?.videoWidth) || 1164;
+      const vh = (usingFcamera ? fc?.height : video?.videoHeight) || 874;
+      const { h } = contentRect(cw, ch, vw, vh);
+      const next = Math.max(0, Math.floor(h));
+      setMapSize((prev) => (prev === next ? prev : next));
+    };
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(pane);
+    const video = videoRef.current;
+    video?.addEventListener("loadedmetadata", measure);
+    return () => {
+      ro.disconnect();
+      video?.removeEventListener("loadedmetadata", measure);
+    };
+  }, [settings.showMap, session.quality, loading]);
 
   // Warm cereal index for overlay paint and/or map GPS.
   useEffect(() => {
@@ -372,10 +409,13 @@ export function DriveDetail({
       <div
         className={cn(
           "flex min-h-0 flex-1 gap-2",
-          showMap ? "flex-row items-stretch" : "flex-col",
+          showMap ? "flex-row items-center" : "flex-col",
         )}
       >
-        <div className="relative isolate z-0 min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg bg-black">
+        <div
+          ref={videoPaneRef}
+          className="relative isolate z-0 min-h-0 min-w-0 flex-1 self-stretch overflow-hidden rounded-lg bg-black"
+        >
           <video
             ref={videoRef}
             className={cn(
@@ -431,7 +471,14 @@ export function DriveDetail({
         </div>
 
         {showMap ? (
-          <aside className="relative aspect-square h-full shrink-0 overflow-hidden rounded-lg border">
+          <aside
+            className="relative shrink-0 overflow-hidden rounded-lg border"
+            style={
+              mapSize > 0
+                ? { width: mapSize, height: mapSize }
+                : { width: "min(40vw, 100%)", aspectRatio: "1 / 1" }
+            }
+          >
             <DriveMap
               className="absolute inset-0"
               getPosition={() => {
