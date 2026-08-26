@@ -431,25 +431,23 @@ export function DriveDetail({
         </div>
 
         {showMap ? (
-          <aside className="flex w-[min(320px,28vw)] shrink-0 flex-col justify-center">
-            <div className="relative aspect-square w-full overflow-hidden rounded-lg border">
-              <DriveMap
-                className="absolute inset-0"
-                getPosition={() => {
-                  const frame = timelineRef.current?.stateAt(
-                    sessionRef.current.t,
-                    !settings.disableOverlayInterpolation,
-                  );
-                  if (frame?.latitude == null || frame?.longitude == null) return null;
-                  return {
-                    lat: frame.latitude,
-                    lon: frame.longitude,
-                    bearingDeg: frame.bearingDeg,
-                  };
-                }}
-                getPath={() => timelineRef.current?.gpsPath() ?? []}
-              />
-            </div>
+          <aside className="relative aspect-square h-full shrink-0 overflow-hidden rounded-lg border">
+            <DriveMap
+              className="absolute inset-0"
+              getPosition={() => {
+                const frame = timelineRef.current?.stateAt(
+                  sessionRef.current.t,
+                  !settings.disableOverlayInterpolation,
+                );
+                if (frame?.latitude == null || frame?.longitude == null) return null;
+                return {
+                  lat: frame.latitude,
+                  lon: frame.longitude,
+                  bearingDeg: frame.bearingDeg,
+                };
+              }}
+              getPath={() => timelineRef.current?.gpsPath() ?? []}
+            />
           </aside>
         ) : null}
       </div>
