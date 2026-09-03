@@ -8,7 +8,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// httpClient is used for all outbound provider calls. DefaultClient has no
+// timeout, so a DNS/TLS/network stall would block the request indefinitely
+// (observed as ~16s hangs that surface only as a generic 401). A bounded
+// timeout fails fast and keeps the real error (dial/lookup) intact.
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // TokenExchange holds provider app credentials used only on the server.
 type TokenExchange struct {
@@ -53,9 +60,9 @@ func (t TokenExchange) exchangeGoogle(ctx context.Context, code, codeVerifier, r
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("google token request: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -91,9 +98,9 @@ func (t TokenExchange) exchangeGitHub(ctx context.Context, code, codeVerifier, r
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("github token request: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -149,9 +156,9 @@ func fetchGoogleUser(ctx context.Context, accessToken string) (User, error) {
 		return User{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return User{}, err
+		return User{}, fmt.Errorf("google userinfo request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -185,9 +192,9 @@ func fetchGitHubUser(ctx context.Context, accessToken string) (User, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return User{}, err
+		return User{}, fmt.Errorf("github user request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -227,7 +234,7 @@ func fetchGitHubPrimaryEmail(ctx context.Context, accessToken string) string {
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return ""
 	}

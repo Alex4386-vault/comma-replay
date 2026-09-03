@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -145,11 +146,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 	accessToken, err := ex.ExchangeCode(r.Context(), body.Provider, body.Code, body.CodeVerifier, body.RedirectURI)
 	if err != nil {
+		log.Printf("auth: token exchange failed (provider=%s): %v", body.Provider, err)
 		http.Error(w, "token exchange failed", http.StatusUnauthorized)
 		return
 	}
 	user, err := auth.FetchUser(r.Context(), body.Provider, accessToken)
 	if err != nil {
+		log.Printf("auth: token validation failed (provider=%s): %v", body.Provider, err)
 		http.Error(w, "token validation failed", http.StatusUnauthorized)
 		return
 	}
