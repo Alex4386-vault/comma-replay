@@ -67,6 +67,17 @@ export class QcameraSource {
     return Math.max(1, this.record.segments.length) * SEGMENT_SECONDS;
   }
 
+  /**
+   * Live drive time straight off the media element, for frame-accurate overlay
+   * sync. Reading this every rAF avoids the ~250ms lag of the onTime poll, which
+   * otherwise makes the HUD drift behind the video. Returns NaN while a segment
+   * is loading/seeking (suppressTime) so callers can fall back to session.t.
+   */
+  currentTime(): number {
+    if (this.segmentIndex < 0 || this.suppressTime) return NaN;
+    return this.driveTime();
+  }
+
   async open(): Promise<void> {
     if (!this.source.openObjectURL) {
       throw new Error("DataSource does not support openObjectURL");

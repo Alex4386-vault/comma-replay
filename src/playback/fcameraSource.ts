@@ -58,6 +58,16 @@ export class FcameraSource {
     return Math.max(1, this.record.segments.length) * SEGMENT_SECONDS;
   }
 
+  /**
+   * Live drive time from the internal clock. Matches QcameraSource.currentTime()
+   * so the overlay loop can sample either source uniformly. NaN before the first
+   * frame lands so callers fall back to session.t.
+   */
+  currentTime(): number {
+    if (this.segmentIndex < 0) return NaN;
+    return this.driveTime();
+  }
+
   async open(): Promise<void> {
     if (!FcameraSource.isSupported()) {
       throw new Error("WebCodecs (VideoDecoder) is not supported in this browser");

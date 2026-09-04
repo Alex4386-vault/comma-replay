@@ -3,6 +3,7 @@ import {
   ArrowLeftIcon,
   ChevronUpIcon,
   CircleAlertIcon,
+  DownloadIcon,
   PauseIcon,
   PlayIcon,
   RotateCcwIcon,
@@ -47,6 +48,7 @@ import { PAINTERS } from "@/overlay/painters";
 import { contentRect } from "@/overlay/project";
 import { hudLine, recordPaint } from "@/overlay/perf";
 import { DriveMap } from "@/components/DriveMap";
+import { DownloadDialog } from "@/components/DownloadDialog";
 import { cn } from "@/lib/utils";
 
 const RATES = [0.5, 1, 2, 4] as const;
@@ -84,6 +86,7 @@ export function DriveDetail({
   const [loading, setLoading] = useState(true);
   const [overlayLoading, setOverlayLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloadOpen, setDownloadOpen] = useState(false);
   /** Stable square map size (matches letterboxed video height without layout feedback). */
   const [mapSize, setMapSize] = useState(0);
   const scrubbing = useRef(false);
@@ -248,7 +251,14 @@ export function DriveDetail({
       const h = canvas.clientHeight;
       if (!video || !timeline || !painter || w < 8 || h < 8) return;
 
-      const { index } = timeToSegment(s.t, record.segmentPaths.length);
+      // Sample the source's live playback time each frame so the HUD tracks the
+      // video exactly. session.t only refreshes on the coarse onTime poll (~250ms
+      // for qcamera), which otherwise leaves the overlay drifting behind. While
+      // scrubbing or between segments (NaN), fall back to the last session.t.
+      const live = scrubbing.current ? NaN : (sourceRef.current?.currentTime() ?? NaN);
+      const t = Number.isFinite(live) ? live : s.t;
+
+      const { index } = timeToSegment(t, record.segmentPaths.length);
       timeline.prefetchWindow(index, s.rate >= 2 ? 3 : 2);
 
       const dpr = window.devicePixelRatio || 1;
@@ -271,7 +281,7 @@ export function DriveDetail({
       const vw = (usingFcamera ? fc?.width : video.videoWidth) || 1164;
       const vh = (usingFcamera ? fc?.height : video.videoHeight) || 874;
       const tState = metrics ? performance.now() : 0;
-      const frame = timeline.stateAt(s.t, !settings.disableOverlayInterpolation);
+      const frame = timeline.stateAt(t, !settings.disableOverlayInterpolation);
       const tDraw = metrics ? performance.now() : 0;
       painter.paint(ctx, frame, {
         width: w,
@@ -359,6 +369,15 @@ export function DriveDetail({
           <h1 className="truncate text-base font-medium tracking-tight sm:text-lg">{title}</h1>
           <p className="truncate font-mono text-xs text-muted-foreground">{record.recordId}</p>
         </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          title="Download files"
+          onClick={() => setDownloadOpen(true)}
+        >
+          <DownloadIcon />
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" variant="ghost" size="icon-sm" title="Playback settings">
@@ -614,6 +633,13 @@ export function DriveDetail({
           </Button>
         </div>
       </div>
+
+      <DownloadDialog
+        open={downloadOpen}
+        onOpenChange={setDownloadOpen}
+        source={source}
+        record={record}
+      />
     </div>
   );
 }
