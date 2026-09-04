@@ -10,8 +10,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
 import type { RecordEntry } from "@/records";
 import type { DataSource } from "@/source/types";
@@ -37,20 +38,21 @@ export function DownloadDialog({
 }) {
   const { enqueue } = useDownloadManager();
   const segmentCount = record.segments.length;
+  const lastIndex = Math.max(0, segmentCount - 1);
   const [kinds, setKinds] = useState<Set<LogKind>>(() => new Set(DEFAULT_KINDS));
-  const [selectedSegs, setSelectedSegs] = useState<Set<number>>(
-    () => new Set(record.segments.map((_, i) => i)),
-  );
+  // Inclusive [start, end] over segment indices.
+  const [range, setRange] = useState<[number, number]>([0, lastIndex]);
 
   // Reset selections whenever the dialog is (re)opened for a record.
   useEffect(() => {
     if (!open) return;
     setKinds(new Set(DEFAULT_KINDS));
-    setSelectedSegs(new Set(record.segments.map((_, i) => i)));
+    setRange([0, Math.max(0, record.segments.length - 1)]);
   }, [open, record]);
 
-  const allSegsSelected = selectedSegs.size === segmentCount && segmentCount > 0;
-  const canDownload = kinds.size > 0 && selectedSegs.size > 0;
+  const [startIdx, endIdx] = range;
+  const selectedCount = endIdx - startIdx + 1;
+  const canDownload = kinds.size > 0 && selectedCount > 0;
 
   function toggleKind(kind: LogKind, on: boolean) {
     setKinds((prev) => {
@@ -61,17 +63,36 @@ export function DownloadDialog({
     });
   }
 
-  function toggleSeg(index: number, on: boolean) {
-    setSelectedSegs((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(index);
-      else next.delete(index);
-      return next;
-    });
+  function clampIdx(n: number): number {
+    if (Number.isNaN(n)) return 0;
+    return Math.min(lastIndex, Math.max(0, n));
   }
 
-  function toggleAllSegs(on: boolean) {
-    setSelectedSegs(on ? new Set(record.segments.map((_, i) => i)) : new Set());
+  // Convert a typed segment *number* to its index; falls back to nearest.
+  function segNumToIndex(segNum: number): number {
+    const exact = record.segments.indexOf(segNum);
+    if (exact >= 0) return exact;
+    // Nearest by value when the exact segment number is missing.
+    let best = 0;
+    let bestDelta = Infinity;
+    record.segments.forEach((s, i) => {
+      const d = Math.abs(s - segNum);
+      if (d < bestDelta) {
+        bestDelta = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  function setStart(segNum: number) {
+    const idx = clampIdx(segNumToIndex(segNum));
+    setRange(([, e]) => [Math.min(idx, e), e]);
+  }
+
+  function setEnd(segNum: number) {
+    const idx = clampIdx(segNumToIndex(segNum));
+    setRange(([s]) => [s, Math.max(idx, s)]);
   }
 
   const orderedKinds = useMemo(
@@ -80,7 +101,8 @@ export function DownloadDialog({
   );
 
   function startDownload() {
-    const segmentIndices = [...selectedSegs].sort((a, b) => a - b);
+    const segmentIndices: number[] = [];
+    for (let i = startIdx; i <= endIdx; i++) segmentIndices.push(i);
     enqueue({ source, record, segmentIndices, kinds: orderedKinds });
     toast.success("Download started", {
       description: `Zipping ${orderedKinds.length} file type(s) across ${segmentIndices.length} segment(s).`,
@@ -121,39 +143,62 @@ export function DownloadDialog({
             </div>
           </section>
 
-          <section className="flex flex-col gap-2">
+          <section className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-medium">
-                Segments{" "}
-                <span className="text-muted-foreground">
-                  ({selectedSegs.size}/{segmentCount})
-                </span>
-              </p>
-              <Label className="font-normal">
-                <Checkbox
-                  checked={allSegsSelected}
-                  onCheckedChange={(c) => toggleAllSegs(Boolean(c))}
-                />
-                <span className="text-xs">Select all</span>
-              </Label>
+              <p className="text-sm font-medium">Segment range</p>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {selectedCount} of {segmentCount}
+              </span>
             </div>
-            <ScrollArea className="h-40 rounded-md border">
-              <div className="grid grid-cols-4 gap-1.5 p-2 sm:grid-cols-6">
-                {record.segments.map((segNum, index) => (
-                  <Label
-                    key={index}
-                    className="flex items-center justify-center gap-1.5 rounded-md border px-1.5 py-1.5 font-normal"
-                    title={record.segmentPaths[index]}
-                  >
-                    <Checkbox
-                      checked={selectedSegs.has(index)}
-                      onCheckedChange={(c) => toggleSeg(index, Boolean(c))}
-                    />
-                    <span className="font-mono text-xs tabular-nums">{segNum}</span>
-                  </Label>
-                ))}
+
+            {segmentCount > 1 ? (
+              <Slider
+                min={0}
+                max={lastIndex}
+                step={1}
+                value={range}
+                onValueChange={(vals) => {
+                  const a = clampIdx(vals[0] ?? 0);
+                  const b = clampIdx(vals[1] ?? lastIndex);
+                  setRange([Math.min(a, b), Math.max(a, b)]);
+                }}
+                aria-label="Segment range"
+              />
+            ) : null}
+
+            <div className="flex items-end gap-3">
+              <div className="flex flex-1 flex-col gap-1">
+                <Label htmlFor="dl-seg-start" className="text-xs text-muted-foreground">
+                  From segment
+                </Label>
+                <Input
+                  id="dl-seg-start"
+                  type="number"
+                  inputMode="numeric"
+                  className="font-mono tabular-nums"
+                  min={record.segments[0]}
+                  max={record.segments[endIdx]}
+                  value={record.segments[startIdx] ?? 0}
+                  onChange={(e) => setStart(Number(e.target.value))}
+                />
               </div>
-            </ScrollArea>
+              <span className="pb-2 text-muted-foreground">–</span>
+              <div className="flex flex-1 flex-col gap-1">
+                <Label htmlFor="dl-seg-end" className="text-xs text-muted-foreground">
+                  To segment
+                </Label>
+                <Input
+                  id="dl-seg-end"
+                  type="number"
+                  inputMode="numeric"
+                  className="font-mono tabular-nums"
+                  min={record.segments[startIdx]}
+                  max={record.segments[lastIndex]}
+                  value={record.segments[endIdx] ?? 0}
+                  onChange={(e) => setEnd(Number(e.target.value))}
+                />
+              </div>
+            </div>
           </section>
         </div>
 
