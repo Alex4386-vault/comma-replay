@@ -58,11 +58,13 @@ export function DriveDetail({
   record,
   meta,
   onClose,
+  onOpenDownloads,
 }: {
   source: DataSource;
   record: RecordEntry;
   meta?: DriveMeta;
   onClose: () => void;
+  onOpenDownloads?: () => void;
 }) {
   const { settings, setSettings } = useSettings();
   const summary = useMemo(
@@ -639,6 +641,7 @@ export function DriveDetail({
         onOpenChange={setDownloadOpen}
         source={source}
         record={record}
+        onStarted={onOpenDownloads}
       />
     </div>
   );

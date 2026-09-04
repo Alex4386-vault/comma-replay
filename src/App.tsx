@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
+  DownloadIcon,
   FilterIcon,
   PanelLeftCloseIcon,
   PanelLeftIcon,
@@ -19,6 +20,8 @@ import {
 import { AccountMenu } from "@/components/AccountMenu";
 import { DriveCard } from "@/components/DriveCard";
 import { DriveDetail } from "@/components/DriveDetail";
+import { DownloadsSheet } from "@/components/DownloadsSheet";
+import { useDownloadManager } from "@/downloadManager";
 import {
   DirectoryLoadingDialog,
   type DirectoryScanProgress,
@@ -60,12 +63,16 @@ function TopBar({
   sidebarOpen,
   onToggleSidebar,
   showSidebarToggle,
+  onOpenDownloads,
+  downloadCount,
 }: {
   user: AuthUser | null;
   onLogout: () => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   showSidebarToggle: boolean;
+  onOpenDownloads: () => void;
+  downloadCount: number;
 }) {
   return (
     <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4">
@@ -84,7 +91,25 @@ function TopBar({
         ) : null}
         <span className="text-lg font-semibold tracking-tight">replay</span>
       </div>
-      <AccountMenu user={user} onLogout={onLogout} />
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={onOpenDownloads}
+          title="Downloads"
+          aria-label="Downloads"
+          className="relative"
+        >
+          <DownloadIcon />
+          {downloadCount > 0 ? (
+            <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground tabular-nums">
+              {downloadCount}
+            </span>
+          ) : null}
+        </Button>
+        <AccountMenu user={user} onLogout={onLogout} />
+      </div>
     </header>
   );
 }
@@ -181,6 +206,8 @@ export function App() {
   const [localDialogOpen, setLocalDialogOpen] = useState(false);
   const [dirScan, setDirScan] = useState<DirectoryScanProgress | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const { activeCount } = useDownloadManager();
 
   const loadServer = useCallback(async (deviceId?: string) => {
     setLoading(true);
@@ -388,6 +415,7 @@ export function App() {
         onPicked={onLocalPicked}
       />
       <DirectoryLoadingDialog open={dirScan != null} progress={dirScan} />
+      <DownloadsSheet open={downloadsOpen} onOpenChange={setDownloadsOpen} />
 
       <div className="flex h-svh flex-col bg-background">
         <TopBar
@@ -396,6 +424,8 @@ export function App() {
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           showSidebarToggle={hasSource}
+          onOpenDownloads={() => setDownloadsOpen(true)}
+          downloadCount={activeCount}
         />
         <div className="flex min-h-0 flex-1">
           {hasSource ? (
@@ -459,6 +489,7 @@ export function App() {
                   record={selectedRecord}
                   meta={driveMeta[selectedRecord.id]}
                   onClose={() => setSelectedRecord(null)}
+                  onOpenDownloads={() => setDownloadsOpen(true)}
                 />
               ) : emptyAlert ? (
                 <Alert variant="warning">

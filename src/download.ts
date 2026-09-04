@@ -1,3 +1,4 @@
+import { Zip, ZipPassThrough } from "fflate";
 import type { DataSource } from "@/source/types";
 import type { RecordEntry } from "@/records";
 import { FILE_NAMES, type LogKind } from "@/route/patterns";
@@ -81,71 +82,165 @@ export async function resolveFiles(
   return out;
 }
 
-/** Trigger a browser download of a blob URL as `filename`, then revoke. */
-function triggerAnchorDownload(url: string, filename: string, revoke: boolean): Promise<void> {
-  return new Promise((resolve) => {
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.rel = "noopener";
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    // Give the browser a tick to start the download before cleanup.
-    setTimeout(() => {
-      a.remove();
-      if (revoke) URL.revokeObjectURL(url);
-      resolve();
-    }, 200);
-  });
+/** Trigger a browser download of a blob as `filename`, then revoke. */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 200);
 }
 
-/** Fetch one resolved file and save it to disk via an anchor download. */
-export async function downloadOne(source: DataSource, file: ResolvedFile): Promise<void> {
-  // HTTP sources expose a direct URL; anything with auth needs a blob fetch.
-  const direct = source.resolveUrl?.(file.path);
-  if (direct) {
-    await triggerAnchorDownload(direct, file.filename, false);
-    return;
-  }
-  if (source.openObjectURL) {
-    const handle = await source.openObjectURL(file.path);
-    await triggerAnchorDownload(handle.url, file.filename, false);
-    handle.revoke();
-    return;
-  }
-  const bytes = await source.read(file.path);
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart]));
-  await triggerAnchorDownload(url, file.filename, true);
-}
+export type FileStatus = "pending" | "active" | "done" | "error";
 
-export type DownloadProgress = {
-  completed: number;
-  total: number;
-  current: string;
+export type FileFetchEvent = {
+  index: number;
+  status: FileStatus;
+  /** Bytes fetched so far (when known). */
+  loaded?: number;
+  /** Total bytes (when known). */
+  total?: number;
+  error?: string;
 };
 
 /**
- * Download each resolved file sequentially (keeps memory + auth simple and
- * avoids the browser blocking a burst of simultaneous downloads).
+ * Fetch one file's bytes, reporting byte progress when the source can stream.
+ * Falls back to a whole-file read (indeterminate progress) otherwise.
  */
-export async function downloadFiles(
+async function fetchBytes(
   source: DataSource,
-  files: ResolvedFile[],
-  opts?: { onProgress?: (p: DownloadProgress) => void; signal?: AbortSignal },
-): Promise<{ failed: ResolvedFile[] }> {
-  const failed: ResolvedFile[] = [];
-  for (let i = 0; i < files.length; i++) {
-    if (opts?.signal?.aborted) break;
-    const file = files[i]!;
-    opts?.onProgress?.({ completed: i, total: files.length, current: file.filename });
-    try {
-      await downloadOne(source, file);
-    } catch (err) {
-      console.error("[replay] download failed", file.path, err);
-      failed.push(file);
+  path: string,
+  onProgress: (loaded: number, total?: number) => void,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  // Streamable sources (HTTP direct URL) give real byte progress.
+  const direct = source.resolveUrl?.(path);
+  if (direct) {
+    const res = await fetch(direct, { signal });
+    if (!res.ok || !res.body) throw new Error(`GET failed: ${res.status}`);
+    return readStream(res.body, Number(res.headers.get("content-length")) || undefined, onProgress);
+  }
+  // File-backed sources (local, server blob) expose a File we can stream.
+  if (source.openFile) {
+    const file = await source.openFile(path);
+    return readStream(file.stream(), file.size || undefined, onProgress, signal);
+  }
+  const bytes = await source.read(path);
+  onProgress(bytes.byteLength, bytes.byteLength);
+  return bytes;
+}
+
+async function readStream(
+  stream: ReadableStream<Uint8Array>,
+  total: number | undefined,
+  onProgress: (loaded: number, total?: number) => void,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  onProgress(0, total);
+  for (;;) {
+    if (signal?.aborted) {
+      await reader.cancel();
+      throw new DOMException("Aborted", "AbortError");
+    }
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      loaded += value.byteLength;
+      onProgress(loaded, total);
     }
   }
-  opts?.onProgress?.({ completed: files.length, total: files.length, current: "" });
-  return { failed };
+  const out = new Uint8Array(loaded);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+export type ZipRunResult = { doneCount: number; failed: ResolvedFile[]; aborted: boolean };
+
+/**
+ * Fetch every resolved file sequentially and stream them into a single zip
+ * blob. Camera/log data is already compressed, so files are stored (no deflate)
+ * to keep CPU low. Per-file status is reported via `onFile`.
+ */
+export async function runZipJob(
+  source: DataSource,
+  files: ResolvedFile[],
+  zipName: string,
+  opts: { onFile: (e: FileFetchEvent) => void; signal?: AbortSignal },
+): Promise<ZipRunResult> {
+  const { onFile, signal } = opts;
+  const parts: Uint8Array[] = [];
+  const zip = new Zip((err, chunk, final) => {
+    if (err) throw err;
+    if (chunk) parts.push(chunk);
+    void final;
+  });
+
+  const failed: ResolvedFile[] = [];
+  let doneCount = 0;
+  let aborted = false;
+  // Guard against duplicate names inside the archive.
+  const usedNames = new Set<string>();
+
+  for (let i = 0; i < files.length; i++) {
+    if (signal?.aborted) {
+      aborted = true;
+      break;
+    }
+    const file = files[i]!;
+    onFile({ index: i, status: "active", loaded: 0 });
+    try {
+      const bytes = await fetchBytes(
+        source,
+        file.path,
+        (loaded, total) => onFile({ index: i, status: "active", loaded, total }),
+        signal,
+      );
+      let name = file.filename;
+      for (let n = 2; usedNames.has(name); n++) {
+        name = `${file.filename}.${n}`;
+      }
+      usedNames.add(name);
+      const entry = new ZipPassThrough(name);
+      zip.add(entry);
+      entry.push(bytes, true);
+      doneCount++;
+      onFile({ index: i, status: "done", loaded: bytes.byteLength, total: bytes.byteLength });
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+        aborted = true;
+        break;
+      }
+      console.error("[replay] file download failed", file.path, err);
+      failed.push(file);
+      onFile({
+        index: i,
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  zip.end();
+
+  if (!aborted && doneCount > 0) {
+    const blob = new Blob(parts as BlobPart[], { type: "application/zip" });
+    saveBlob(blob, zipName);
+  }
+
+  return { doneCount, failed, aborted };
 }

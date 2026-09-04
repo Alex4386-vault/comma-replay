@@ -59,6 +59,7 @@ const emptySeg = (): OverlaySegment => ({
   calib: [],
   radarLeads: [],
   map: [],
+  frameOffset: 0,
 });
 
 /**
@@ -126,19 +127,22 @@ export class CerealTimeline {
       return { ...EMPTY_FRAME, t: driveTime, rpy: this.lastRpy, height: this.lastHeight };
     }
 
-    const modelSpan = spanAt(seg.models, offset);
-    const carSpan = spanAt(seg.car, offset);
-    const sd = spanAt(seg.sd, offset);
-    const ctrlSpan = spanAt(seg.ctrl, offset);
-    const calibSpan = spanAt(seg.calib, offset);
+    // Sample times are on the telemetry clock; the video offset is on the frame
+    // clock. Shift by the segment's frameOffset so the HUD lines up with video.
+    const sampleT = offset + seg.frameOffset;
+    const modelSpan = spanAt(seg.models, sampleT);
+    const carSpan = spanAt(seg.car, sampleT);
+    const sd = spanAt(seg.sd, sampleT);
+    const ctrlSpan = spanAt(seg.ctrl, sampleT);
+    const calibSpan = spanAt(seg.calib, sampleT);
     const model = interpModel(modelSpan, interpolate);
     const car = interpCar(carSpan, interpolate);
     const ctrl = interpCtrl(ctrlSpan, interpolate);
     const calib = interpCalib(calibSpan, interpolate);
-    const radar = interpLeads(spanAt(seg.radarLeads, offset), interpolate);
-    const map = spanAt(seg.map, offset)?.lo;
+    const radar = interpLeads(spanAt(seg.radarLeads, sampleT), interpolate);
+    const map = spanAt(seg.map, sampleT)?.lo;
     const gps = this.gpsAt(driveTime, interpolate);
-    const dmSpan = spanAt(seg.dm, offset);
+    const dmSpan = spanAt(seg.dm, sampleT);
     const dm = interpDm(dmSpan, interpolate);
     if (calib) {
       this.lastRpy = calib.rpy;
@@ -179,7 +183,7 @@ export class CerealTimeline {
       steeringPressed: car?.steeringPressed ?? false,
       alert: sd ? sd.lo.alert : (this.lastFrame?.alert ?? null),
       standstill: car?.standstill ?? false,
-      standstillDuration: standstillDuration(seg.car, offset),
+      standstillDuration: standstillDuration(seg.car, sampleT),
       leftBlinker: car?.leftBlinker ?? false,
       rightBlinker: car?.rightBlinker ?? false,
       leftBlindspot: car?.leftBlindspot ?? false,
@@ -227,15 +231,17 @@ export class CerealTimeline {
     const n = this.record.segmentPaths.length;
     const { index } = timeToSegment(driveTime, n);
     const samples: Timed<GpsHud>[] = [];
+    // Convert telemetry sample times to the video clock (subtract frameOffset)
+    // so they compare correctly against driveTime.
     for (let i = Math.max(0, index - 1); i <= Math.min(n - 1, index + 1); i++) {
       const seg = this.cache.get(i);
       if (!seg) continue;
-      const base = i * SEGMENT_SECONDS;
+      const base = i * SEGMENT_SECONDS - seg.frameOffset;
       for (const s of seg.gps) samples.push({ t: base + s.t, value: s.value });
     }
     if (samples.length === 0) {
       for (const [i, seg] of this.cache) {
-        const base = i * SEGMENT_SECONDS;
+        const base = i * SEGMENT_SECONDS - seg.frameOffset;
         for (const s of seg.gps) samples.push({ t: base + s.t, value: s.value });
       }
     }

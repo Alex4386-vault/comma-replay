@@ -11,20 +11,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 import type { RecordEntry } from "@/records";
 import type { DataSource } from "@/source/types";
 import type { LogKind } from "@/route/patterns";
-import {
-  DOWNLOAD_KINDS,
-  KIND_LABELS,
-  downloadFiles,
-  resolveFiles,
-  type DownloadProgress,
-} from "@/download";
+import { DOWNLOAD_KINDS, KIND_LABELS } from "@/download";
+import { useDownloadManager } from "@/downloadManager";
 
 const DEFAULT_KINDS: LogKind[] = ["qcamera"];
 
@@ -33,31 +26,31 @@ export function DownloadDialog({
   onOpenChange,
   source,
   record,
+  onStarted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   source: DataSource;
   record: RecordEntry;
+  /** Called after a job is enqueued (e.g. to reveal the downloads sheet). */
+  onStarted?: () => void;
 }) {
+  const { enqueue } = useDownloadManager();
   const segmentCount = record.segments.length;
   const [kinds, setKinds] = useState<Set<LogKind>>(() => new Set(DEFAULT_KINDS));
   const [selectedSegs, setSelectedSegs] = useState<Set<number>>(
     () => new Set(record.segments.map((_, i) => i)),
   );
-  const [progress, setProgress] = useState<DownloadProgress | null>(null);
-  const [busy, setBusy] = useState(false);
 
   // Reset selections whenever the dialog is (re)opened for a record.
   useEffect(() => {
     if (!open) return;
     setKinds(new Set(DEFAULT_KINDS));
     setSelectedSegs(new Set(record.segments.map((_, i) => i)));
-    setProgress(null);
-    setBusy(false);
   }, [open, record]);
 
   const allSegsSelected = selectedSegs.size === segmentCount && segmentCount > 0;
-  const canDownload = kinds.size > 0 && selectedSegs.size > 0 && !busy;
+  const canDownload = kinds.size > 0 && selectedSegs.size > 0;
 
   function toggleKind(kind: LogKind, on: boolean) {
     setKinds((prev) => {
@@ -86,44 +79,18 @@ export function DownloadDialog({
     [kinds],
   );
 
-  async function startDownload() {
-    setBusy(true);
-    setProgress({ completed: 0, total: 0, current: "Resolving files…" });
-    try {
-      const indices = [...selectedSegs].sort((a, b) => a - b);
-      const files = await resolveFiles(source, record, indices, orderedKinds);
-      if (files.length === 0) {
-        toast.error("No matching files found for the current selection.");
-        setBusy(false);
-        setProgress(null);
-        return;
-      }
-      const { failed } = await downloadFiles(source, files, {
-        onProgress: setProgress,
-      });
-      if (failed.length === 0) {
-        toast.success(`Downloaded ${files.length} file${files.length === 1 ? "" : "s"}.`);
-        onOpenChange(false);
-      } else {
-        toast.error(
-          `Downloaded ${files.length - failed.length}/${files.length}; ${failed.length} failed.`,
-        );
-      }
-    } catch (err) {
-      console.error("[replay] download error", err);
-      toast.error(err instanceof Error ? err.message : "Download failed.");
-    } finally {
-      setBusy(false);
-    }
+  function startDownload() {
+    const segmentIndices = [...selectedSegs].sort((a, b) => a - b);
+    enqueue({ source, record, segmentIndices, kinds: orderedKinds });
+    toast.success("Download started", {
+      description: `Zipping ${orderedKinds.length} file type(s) across ${segmentIndices.length} segment(s).`,
+    });
+    onOpenChange(false);
+    onStarted?.();
   }
 
-  const percent =
-    progress && progress.total > 0
-      ? Math.round((progress.completed / progress.total) * 100)
-      : null;
-
   return (
-    <Dialog open={open} onOpenChange={(next) => (!busy ? onOpenChange(next) : undefined)}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -147,7 +114,6 @@ export function DownloadDialog({
                   <Checkbox
                     checked={kinds.has(kind)}
                     onCheckedChange={(c) => toggleKind(kind, Boolean(c))}
-                    disabled={busy}
                   />
                   <span className="truncate text-xs">{KIND_LABELS[kind]}</span>
                 </Label>
@@ -167,7 +133,6 @@ export function DownloadDialog({
                 <Checkbox
                   checked={allSegsSelected}
                   onCheckedChange={(c) => toggleAllSegs(Boolean(c))}
-                  disabled={busy}
                 />
                 <span className="text-xs">Select all</span>
               </Label>
@@ -183,7 +148,6 @@ export function DownloadDialog({
                     <Checkbox
                       checked={selectedSegs.has(index)}
                       onCheckedChange={(c) => toggleSeg(index, Boolean(c))}
-                      disabled={busy}
                     />
                     <span className="font-mono text-xs tabular-nums">{segNum}</span>
                   </Label>
@@ -191,36 +155,15 @@ export function DownloadDialog({
               </div>
             </ScrollArea>
           </section>
-
-          {progress ? (
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span className="truncate">
-                  {progress.total > 0
-                    ? `${progress.completed}/${progress.total} · ${progress.current || "done"}`
-                    : progress.current}
-                </span>
-                {percent != null ? (
-                  <span className="shrink-0 tabular-nums">{percent}%</span>
-                ) : null}
-              </div>
-              <Progress value={percent ?? undefined} />
-            </div>
-          ) : null}
         </div>
 
         <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="button" onClick={() => void startDownload()} disabled={!canDownload}>
-            {busy ? <Spinner data-icon="inline-start" /> : <DownloadIcon data-icon="inline-start" />}
-            {busy ? "Downloading…" : "Download"}
+          <Button type="button" onClick={startDownload} disabled={!canDownload}>
+            <DownloadIcon data-icon="inline-start" />
+            Download zip
           </Button>
         </DialogFooter>
       </DialogContent>

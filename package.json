@@ -25,6 +25,7 @@
     "capnp-ts": "^0.9.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "fflate": "^0.8.3",
     "fzstd": "^0.1.1",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.33.0",

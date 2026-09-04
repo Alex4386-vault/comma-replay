@@ -35,7 +35,25 @@ export type OverlaySegment = {
   calib: Timed<{ rpy: [number, number, number]; height: number }>[];
   radarLeads: Timed<OverlayFrame["leads"]>[];
   map: Timed<{ roadName: string; speedLimitMs: number | null }>[];
+  /**
+   * Seconds to add to a video offset to get the telemetry sample time. Sample
+   * times are relative to the first *telemetry* event, but the video's t=0 is
+   * the first camera frame; this is (firstFrameMono - firstEventMono) so the two
+   * clocks line up. 0 when no camera-frame events are present (e.g. thin qlogs).
+   */
+  frameOffset: number;
 };
+
+/**
+ * Road camera frame events. Their logMonoTime marks the frame the video shows,
+ * so the earliest one anchors telemetry to the same clock as video.currentTime.
+ * Narrow-road = the main road camera that qcamera.ts / fcamera.hevc come from.
+ */
+const CAMERA_ANCHOR_WHICH: ReadonlySet<number> = new Set<number>([
+  Event_Which.NARROW_ROAD_CAMERA_STATE,
+  Event_Which.NARROW_ROAD_ENCODE_IDX,
+  Event_Which.Q_NARROW_ROAD_ENCODE_IDX,
+]);
 
 const PATH_DRAW_N = 17;
 const MODEL_MIN_DT = 0.08;
@@ -563,6 +581,7 @@ export async function indexOverlayBytes(
   const radarLeads: OverlaySegment["radarLeads"] = [];
   const map: OverlaySegment["map"] = [];
   let t0: bigint | null = null;
+  let frameMono0: bigint | null = null;
   let n = 0;
   let lastModel = -1;
   let lastCar = -1;
@@ -584,6 +603,18 @@ export async function indexOverlayBytes(
   for (const event of parseEvents(raw)) {
     n++;
     const which = event.which();
+
+    // Camera-frame events aren't kept as samples, but their logMonoTime marks
+    // the video's frame clock. Record the earliest so we can re-anchor telemetry
+    // onto the same origin as video.currentTime (fixes constant overlay drift).
+    if (CAMERA_ANCHOR_WHICH.has(which)) {
+      const fm = event.getLogMonoTime();
+      const fmBig = typeof fm === "bigint" ? fm : BigInt(Math.trunc(Number(fm)));
+      if (frameMono0 == null || fmBig < frameMono0) frameMono0 = fmBig;
+      if (yieldEvery && n % yieldEvery === 0) await new Promise((r) => setTimeout(r, 0));
+      continue;
+    }
+
     if (
       which !== Event_Which.MODEL_V2 &&
       which !== Event_Which.DRIVING_MODEL_DATA &&
@@ -750,5 +781,26 @@ export async function indexOverlayBytes(
     if (yieldEvery && n % yieldEvery === 0) await new Promise((r) => setTimeout(r, 0));
   }
 
-  return { models, car, sd: sd.length ? sd : sdFallback, ctrl, gps, dm, calib, radarLeads, map };
+  // Both anchors are on the same monotonic clock. frameOffset converts a video
+  // offset into telemetry-sample time: sampleT = videoOffset + frameOffset.
+  let frameOffset = 0;
+  if (frameMono0 != null && t0 != null) {
+    const delta = Number(frameMono0 - t0) / 1e9;
+    // Guard against absurd values from truncated/mixed logs; a real offset is
+    // sub-second. Anything larger means the anchor is unreliable — skip it.
+    if (Number.isFinite(delta) && Math.abs(delta) < 5) frameOffset = delta;
+  }
+
+  return {
+    models,
+    car,
+    sd: sd.length ? sd : sdFallback,
+    ctrl,
+    gps,
+    dm,
+    calib,
+    radarLeads,
+    map,
+    frameOffset,
+  };
 }
