@@ -19,6 +19,7 @@ export type AppSettings = {
   reverseGeocode: boolean;
   useMetric: boolean;
   showMap: boolean;
+  showCan: boolean;
   overlayMetrics: boolean;
   disableOverlayInterpolation: boolean;
   sunnypilotOverlay: SunnypilotOverlaySettings;
@@ -30,6 +31,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   reverseGeocode: false,
   useMetric: true,
   showMap: false,
+  showCan: false,
   overlayMetrics: false,
   disableOverlayInterpolation: false,
   sunnypilotOverlay: { ...DEFAULT_SUNNYPILOT_OVERLAY },
@@ -44,6 +46,7 @@ function loadSettings(): AppSettings {
       reverseGeocode: Boolean(parsed.reverseGeocode),
       useMetric: parsed.useMetric ?? DEFAULT_SETTINGS.useMetric,
       showMap: Boolean(parsed.showMap),
+      showCan: Boolean(parsed.showCan),
       overlayMetrics: Boolean(parsed.overlayMetrics),
       disableOverlayInterpolation: Boolean(parsed.disableOverlayInterpolation),
       sunnypilotOverlay: mergeSunnypilotOverlay(parsed.sunnypilotOverlay),

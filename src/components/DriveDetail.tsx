@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
+  BinaryIcon,
   ChevronUpIcon,
   CircleAlertIcon,
   DownloadIcon,
@@ -49,6 +50,8 @@ import { contentRect } from "@/overlay/project";
 import { hudLine, recordPaint } from "@/overlay/perf";
 import { DriveMap } from "@/components/DriveMap";
 import { DownloadDialog } from "@/components/DownloadDialog";
+import { CanPanel } from "@/components/CanPanel";
+import { CanTimeline } from "@/can/canTimeline";
 import { cn } from "@/lib/utils";
 
 const RATES = [0.5, 1, 2, 4] as const;
@@ -92,6 +95,9 @@ export function DriveDetail({
   /** Stable square map size (matches letterboxed video height without layout feedback). */
   const [mapSize, setMapSize] = useState(0);
   const scrubbing = useRef(false);
+  // CAN index lives outside the camera effect so switching quality keeps it warm.
+  const canTimeline = useMemo(() => new CanTimeline(source, record), [source, record]);
+  const [canMarkers, setCanMarkers] = useState<number[]>([]);
   const loadedSeg = useRef(-1);
 
   const patch = useCallback((partial: Partial<SessionState>) => {
@@ -395,6 +401,12 @@ export function DriveDetail({
               >
                 Show map
               </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={settings.showCan}
+                onCheckedChange={(checked) => setSettings({ showCan: Boolean(checked) })}
+              >
+                CAN inspector
+              </DropdownMenuCheckboxItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
@@ -444,98 +456,127 @@ export function DriveDetail({
         </DropdownMenu>
       </div>
 
-      <div
-        ref={mediaRowRef}
-        className={cn(
-          "flex min-h-0 flex-1 gap-2",
-          showMap ? "flex-row items-center" : "flex-col",
-        )}
-      >
-        <div className="relative isolate z-0 min-h-0 min-w-0 flex-1 self-stretch overflow-hidden rounded-lg bg-black">
-          <video
-            ref={videoRef}
-            className={cn(
-              "absolute inset-0 z-0 h-full w-full object-contain",
-              session.quality === "fcamera" && "hidden",
-            )}
-            playsInline
-            muted
-          />
-          <canvas
-            ref={frameCanvasRef}
-            className={cn(
-              "absolute inset-0 z-0 h-full w-full object-contain",
-              session.quality !== "fcamera" && "hidden",
-            )}
-          />
-          <canvas
-            ref={canvasRef}
-            className={cn(
-              "pointer-events-none absolute inset-0 z-10 h-full w-full bg-transparent",
-              !showOverlay && "hidden",
-            )}
-          />
-          {loading ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-              <Button type="button" disabled variant="secondary">
-                <Spinner data-icon="inline-start" />
-                Loading qcamera…
-              </Button>
-            </div>
-          ) : null}
-          {overlayLoading && (showOverlay || showMap) ? (
-            <div className="absolute top-3 right-3 z-20 rounded-md bg-black/70 px-2 py-1 text-xs text-white">
-              Loading {showOverlay ? "overlay" : "map"}…
-            </div>
-          ) : null}
-          {showOverlay && settings.overlayMetrics ? (
-            <div
-              ref={perfHudRef}
-              className="pointer-events-none absolute bottom-2 left-2 z-20 max-w-[calc(100%-1rem)] truncate rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight text-white/90"
+      <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row">
+        <div
+          ref={mediaRowRef}
+          className={cn(
+            "flex min-h-0 min-w-0 flex-1 gap-2",
+            showMap ? "flex-row items-center" : "flex-col",
+          )}
+        >
+          <div className="relative isolate z-0 min-h-0 min-w-0 flex-1 self-stretch overflow-hidden rounded-lg bg-black">
+            <video
+              ref={videoRef}
+              className={cn(
+                "absolute inset-0 z-0 h-full w-full object-contain",
+                session.quality === "fcamera" && "hidden",
+              )}
+              playsInline
+              muted
             />
-          ) : null}
-          {error ? (
-            <Alert
-              variant="destructive"
-              className="absolute inset-x-3 bottom-3 z-20 border-destructive/40 bg-background/95"
+            <canvas
+              ref={frameCanvasRef}
+              className={cn(
+                "absolute inset-0 z-0 h-full w-full object-contain",
+                session.quality !== "fcamera" && "hidden",
+              )}
+            />
+            <canvas
+              ref={canvasRef}
+              className={cn(
+                "pointer-events-none absolute inset-0 z-10 h-full w-full bg-transparent",
+                !showOverlay && "hidden",
+              )}
+            />
+            {loading ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                <Button type="button" disabled variant="secondary">
+                  <Spinner data-icon="inline-start" />
+                  Loading qcamera…
+                </Button>
+              </div>
+            ) : null}
+            {overlayLoading && (showOverlay || showMap) ? (
+              <div className="absolute top-3 right-3 z-20 rounded-md bg-black/70 px-2 py-1 text-xs text-white">
+                Loading {showOverlay ? "overlay" : "map"}…
+              </div>
+            ) : null}
+            {showOverlay && settings.overlayMetrics ? (
+              <div
+                ref={perfHudRef}
+                className="pointer-events-none absolute bottom-2 left-2 z-20 max-w-[calc(100%-1rem)] truncate rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight text-white/90"
+              />
+            ) : null}
+            {error ? (
+              <Alert
+                variant="destructive"
+                className="absolute inset-x-3 bottom-3 z-20 border-destructive/40 bg-background/95"
+              >
+                <CircleAlertIcon />
+                <AlertTitle>Playback error</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+
+          {showMap ? (
+            <aside
+              className="relative shrink-0 overflow-hidden rounded-lg border"
+              style={
+                mapSize > 0
+                  ? { width: mapSize, height: mapSize }
+                  : { width: "min(40vw, 100%)", aspectRatio: "1 / 1" }
+              }
             >
-              <CircleAlertIcon />
-              <AlertTitle>Playback error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
+              <DriveMap
+                className="absolute inset-0"
+                getPosition={() => {
+                  const frame = timelineRef.current?.stateAt(
+                    sessionRef.current.t,
+                    !settings.disableOverlayInterpolation,
+                  );
+                  if (frame?.latitude == null || frame?.longitude == null) return null;
+                  return {
+                    lat: frame.latitude,
+                    lon: frame.longitude,
+                    bearingDeg: frame.bearingDeg,
+                  };
+                }}
+                getPath={() => timelineRef.current?.gpsPath() ?? []}
+              />
+            </aside>
           ) : null}
         </div>
 
-        {showMap ? (
-          <aside
-            className="relative shrink-0 overflow-hidden rounded-lg border"
-            style={
-              mapSize > 0
-                ? { width: mapSize, height: mapSize }
-                : { width: "min(40vw, 100%)", aspectRatio: "1 / 1" }
-            }
-          >
-            <DriveMap
-              className="absolute inset-0"
-              getPosition={() => {
-                const frame = timelineRef.current?.stateAt(
-                  sessionRef.current.t,
-                  !settings.disableOverlayInterpolation,
-                );
-                if (frame?.latitude == null || frame?.longitude == null) return null;
-                return {
-                  lat: frame.latitude,
-                  lon: frame.longitude,
-                  bearingDeg: frame.bearingDeg,
-                };
-              }}
-              getPath={() => timelineRef.current?.gpsPath() ?? []}
+        {settings.showCan ? (
+          <div className="flex h-[55vh] min-h-0 lg:h-auto">
+            <CanPanel
+              timeline={canTimeline}
+              t={session.t}
+              playing={session.playing}
+              seekTo={(t) => void seekTo(t)}
+              onMarkers={setCanMarkers}
+              onClose={() => setSettings({ showCan: false })}
             />
-          </aside>
+          </div>
         ) : null}
       </div>
 
       <div className="flex flex-col gap-3 rounded-lg border bg-card px-3 py-3">
+        {settings.showCan && canMarkers.length > 0 ? (
+          <div
+            className="pointer-events-none relative -mb-2 h-1.5"
+            title="Changes on tracked CAN messages"
+          >
+            {canMarkers.map((m, i) => (
+              <span
+                key={i}
+                className="absolute top-0 h-full w-px bg-amber-500"
+                style={{ left: `${(m / Math.max(session.duration, 0.01)) * 100}%` }}
+              />
+            ))}
+          </div>
+        ) : null}
         <Slider
           min={0}
           max={Math.max(session.duration, 0.01)}
@@ -632,6 +673,18 @@ export function DriveDetail({
             aria-label="Restart"
           >
             <RotateCcwIcon />
+          </Button>
+
+          <Button
+            type="button"
+            variant={settings.showCan ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setSettings({ showCan: !settings.showCan })}
+            aria-pressed={settings.showCan}
+            title="CAN inspector"
+          >
+            <BinaryIcon data-icon="inline-start" />
+            CAN
           </Button>
         </div>
       </div>
