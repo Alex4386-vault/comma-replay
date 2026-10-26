@@ -93,8 +93,12 @@ export async function indexCanBytes(
   for (const event of parseEvents(raw)) {
     const mono = event.getLogMonoTime();
     const monoBig = typeof mono === "bigint" ? mono : BigInt(Math.trunc(Number(mono)));
-    if (t0 == null) t0 = monoBig;
     const which = event.which();
+    // initData can be stamped minutes before the segment (it was 2100 s early on
+    // a sunnypilot rlog), which pushed every frame past the window below. Anchor
+    // on the first real event, like the overlay index does.
+    if (t0 == null && which !== Event_Which.INIT_DATA && which !== Event_Which.SENTINEL) t0 = monoBig;
+    if (t0 == null) continue;
     try {
       if (which === Event_Which.CAN) {
         const t = Number(monoBig - t0) / 1e9;
