@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, path string, size int) {
@@ -51,5 +52,35 @@ func TestListRoutes(t *testing.T) {
 	}
 	if got := routes[1].Signature(); got != "2:0," {
 		t.Fatalf("signature = %q", got)
+	}
+}
+
+func TestScanDeviceReusesUnchangedDirs(t *testing.T) {
+	root := t.TempDir()
+	seg := filepath.Join(root, "github_1", "dev", "0000027e--11b9b83499--0")
+	writeFile(t, filepath.Join(seg, "qlog.zst"), 10)
+	st, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.ScanDevice("github_1", "dev", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same mtime: the previous entry is trusted without reading the dir.
+	prev := Scan{"0000027e--11b9b83499--0": {ModTime: first["0000027e--11b9b83499--0"].ModTime, Kinds: []string{"marker"}}}
+	again, _ := st.ScanDevice("github_1", "dev", prev)
+	if got := again["0000027e--11b9b83499--0"].Kinds; !reflect.DeepEqual(got, []string{"marker"}) {
+		t.Fatalf("unchanged dir was re-read: %v", got)
+	}
+	// A synced file bumps the dir mtime, so it is read again.
+	writeFile(t, filepath.Join(seg, "qcamera.ts"), 10)
+	future := time.Now().Add(time.Minute)
+	if err := os.Chtimes(seg, future, future); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := st.ScanDevice("github_1", "dev", prev)
+	if got := after["0000027e--11b9b83499--0"].Kinds; !reflect.DeepEqual(got, []string{"qcamera", "qlog"}) {
+		t.Fatalf("changed dir kinds = %v", got)
 	}
 }

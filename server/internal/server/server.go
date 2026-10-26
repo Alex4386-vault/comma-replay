@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/Alex4386-vault/comma-replay/server/internal/config"
 	"github.com/Alex4386-vault/comma-replay/server/internal/geocode"
 	"github.com/Alex4386-vault/comma-replay/server/internal/meta"
+	"github.com/Alex4386-vault/comma-replay/server/internal/persist"
 	"github.com/Alex4386-vault/comma-replay/server/internal/store"
 )
 
@@ -30,16 +32,26 @@ type Server struct {
 	meta     *meta.Cache
 
 	routesMu    sync.Mutex
-	routesCache map[string]routesEntry
+	routesCache map[string]*routesEntry
 }
 
-// A device listing reads every segment dir, so keep it briefly; sync only
-// changes it every so often and ?fresh=1 skips the cache.
-const routesTTL = 15 * time.Second
+// After this long a device listing is rescanned in the background on the next
+// request; the request itself still gets the cached listing straight away.
+const routesStale = 15 * time.Second
 
 type routesEntry struct {
-	at     time.Time
-	routes []store.Route
+	scanMu     sync.Mutex // one scan of a device at a time
+	at         time.Time
+	scan       store.Scan
+	routes     []store.Route
+	loaded     bool
+	refreshing bool
+}
+
+// routesFile is where a device's scan is kept between restarts.
+type routesFile struct {
+	At   time.Time  `json:"at"`
+	Scan store.Scan `json:"scan"`
 }
 
 func New(cfg config.Config, st *store.Store, sessions *auth.Store, geo *geocode.Cache, driveMeta *meta.Cache) *Server {
@@ -49,25 +61,84 @@ func New(cfg config.Config, st *store.Store, sessions *auth.Store, geo *geocode.
 		sessions:    sessions,
 		geocode:     geo,
 		meta:        driveMeta,
-		routesCache: make(map[string]routesEntry),
+		routesCache: make(map[string]*routesEntry),
 	}
 }
 
+func (s *Server) routesPath(userID, deviceID string) string {
+	if s.cfg.CacheDir == "" {
+		return ""
+	}
+	return filepath.Join(s.cfg.CacheDir, "routes", userID+"_"+deviceID+".json")
+}
+
+// routes returns a device's listing, stale-while-revalidate: a cached (or
+// persisted) listing is returned immediately and rescanned in the background
+// once stale. Only a cold start or ?fresh=1 waits for a scan.
 func (s *Server) routes(userID, deviceID string, fresh bool) ([]store.Route, error) {
 	key := userID + "/" + deviceID
 	s.routesMu.Lock()
 	e, ok := s.routesCache[key]
-	s.routesMu.Unlock()
-	if ok && !fresh && time.Since(e.at) < routesTTL {
-		return e.routes, nil
+	if !ok {
+		e = &routesEntry{}
+		s.routesCache[key] = e
 	}
-	routes, err := s.store.ListRoutes(userID, deviceID)
+	if !e.loaded {
+		var f routesFile
+		if err := persist.Load(s.routesPath(userID, deviceID), &f); err != nil {
+			log.Printf("routes cache %s: %v", key, err)
+		} else if f.Scan != nil {
+			e.at, e.scan, e.routes, e.loaded = f.At, f.Scan, store.RoutesFromScan(f.Scan), true
+		}
+	}
+	if e.loaded && !fresh {
+		routes := e.routes
+		if time.Since(e.at) > routesStale && !e.refreshing {
+			e.refreshing = true
+			go func() {
+				if _, err := s.rescan(userID, deviceID, e, true); err != nil {
+					log.Printf("routes rescan %s: %v", key, err)
+				}
+			}()
+		}
+		s.routesMu.Unlock()
+		return routes, nil
+	}
+	s.routesMu.Unlock()
+	return s.rescan(userID, deviceID, e, fresh)
+}
+
+// rescan scans the device, reusing unchanged dirs from the last scan. Without
+// force, a caller that waited behind another scan takes that scan's result.
+func (s *Server) rescan(userID, deviceID string, e *routesEntry, force bool) ([]store.Route, error) {
+	e.scanMu.Lock()
+	defer e.scanMu.Unlock()
+	s.routesMu.Lock()
+	if !force && e.loaded {
+		routes := e.routes
+		s.routesMu.Unlock()
+		return routes, nil
+	}
+	prev := e.scan
+	s.routesMu.Unlock()
+
+	scan, err := s.store.ScanDevice(userID, deviceID, prev)
+	s.routesMu.Lock()
+	e.refreshing = false
 	if err != nil {
+		s.routesMu.Unlock()
 		return nil, err
 	}
-	s.routesMu.Lock()
-	s.routesCache[key] = routesEntry{at: time.Now(), routes: routes}
+	at := time.Now()
+	routes := store.RoutesFromScan(scan)
+	e.at, e.scan, e.routes, e.loaded = at, scan, routes, true
 	s.routesMu.Unlock()
+
+	if path := s.routesPath(userID, deviceID); path != "" {
+		if err := persist.Save(path, routesFile{At: at, Scan: scan}); err != nil {
+			log.Printf("routes cache %s/%s: %v", userID, deviceID, err)
+		}
+	}
 	return routes, nil
 }
 

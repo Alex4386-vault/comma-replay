@@ -62,9 +62,20 @@ func (r Route) Signature() string {
 	return b.String()
 }
 
-// ListRoutes groups a device's record dirs into routes with per-segment file
-// kinds, newest route first. Dirs that are not segments are their own route.
-func (s *Store) ListRoutes(userID, deviceID string) ([]Route, error) {
+// ScanEntry is one record dir's file kinds, as of its modification time.
+type ScanEntry struct {
+	ModTime int64    `json:"m"`
+	Kinds   []string `json:"k"`
+}
+
+// Scan maps a device's record dir names to their file kinds.
+type Scan map[string]ScanEntry
+
+// ScanDevice lists a device's record dirs and their file kinds. Dirs whose
+// mtime matches prev are reused without reading them: a sync adds files to a
+// dir (bumping its mtime), and on a slow mount re-reading thousands of segment
+// dirs takes tens of seconds.
+func (s *Store) ScanDevice(userID, deviceID string, prev Scan) (Scan, error) {
 	names, err := s.ListRecords(userID, deviceID)
 	if err != nil {
 		return nil, err
@@ -75,29 +86,42 @@ func (s *Store) ListRoutes(userID, deviceID string) ([]Route, error) {
 	}
 	devDir := filepath.Join(base, deviceID)
 
-	kinds := make([][]string, len(names))
+	var mu sync.Mutex
+	out := make(Scan, len(names))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 16)
-	for i, name := range names {
+	for _, name := range names {
 		if skipDirs[name] {
 			continue
 		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, name string) {
+		go func(name string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			kinds[i] = dirKinds(filepath.Join(devDir, name))
-		}(i, name)
+			dir := filepath.Join(devDir, name)
+			fi, err := os.Stat(dir)
+			if err != nil {
+				return
+			}
+			e, ok := prev[name]
+			if !ok || e.ModTime != fi.ModTime().UnixNano() {
+				e = ScanEntry{ModTime: fi.ModTime().UnixNano(), Kinds: dirKinds(dir)}
+			}
+			mu.Lock()
+			out[name] = e
+			mu.Unlock()
+		}(name)
 	}
 	wg.Wait()
+	return out, nil
+}
 
+// RoutesFromScan groups record dirs into routes, newest route first. Dirs that
+// are not segments are their own route.
+func RoutesFromScan(scan Scan) []Route {
 	byID := make(map[string]*Route)
-	order := make([]string, 0)
-	for i, name := range names {
-		if skipDirs[name] {
-			continue
-		}
+	for name, e := range scan {
 		id, num := name, 0
 		if m := segmentDir.FindStringSubmatch(name); m != nil {
 			id = m[1]
@@ -107,19 +131,25 @@ func (s *Store) ListRoutes(userID, deviceID string) ([]Route, error) {
 		if !ok {
 			r = &Route{ID: id}
 			byID[id] = r
-			order = append(order, id)
 		}
-		r.Segments = append(r.Segments, SegmentFiles{Num: num, Dir: name, Kinds: kinds[i]})
+		r.Segments = append(r.Segments, SegmentFiles{Num: num, Dir: name, Kinds: e.Kinds})
 	}
-
-	out := make([]Route, 0, len(order))
-	for _, id := range order {
-		r := byID[id]
+	out := make([]Route, 0, len(byID))
+	for _, r := range byID {
 		sort.Slice(r.Segments, func(a, b int) bool { return r.Segments[a].Num < r.Segments[b].Num })
 		out = append(out, *r)
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].ID > out[b].ID })
-	return out, nil
+	return out
+}
+
+// ListRoutes scans a device from scratch.
+func (s *Store) ListRoutes(userID, deviceID string) ([]Route, error) {
+	scan, err := s.ScanDevice(userID, deviceID, nil)
+	if err != nil {
+		return nil, err
+	}
+	return RoutesFromScan(scan), nil
 }
 
 func dirKinds(dir string) []string {
@@ -134,6 +164,7 @@ func dirKinds(dir string) []string {
 		if !ok || e.IsDir() || seen[k] {
 			continue
 		}
+		// A zero-byte file is a sync that hasn't landed yet.
 		if fi, err := e.Info(); err != nil || fi.Size() == 0 {
 			continue
 		}

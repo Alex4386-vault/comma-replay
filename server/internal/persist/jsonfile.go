@@ -76,16 +76,16 @@ func (f *File) Flush() error {
 	if f == nil || f.path == "" || !f.dirty.Swap(false) {
 		return nil
 	}
-	if err := save(f.path, f.snapshot()); err != nil {
+	if err := Save(f.path, f.snapshot()); err != nil {
 		f.dirty.Store(true)
 		return err
 	}
 	return nil
 }
 
-// save writes v next to path and renames it into place, so a crash mid-write
+// Save writes v next to path and renames it into place, so a crash mid-write
 // never leaves a truncated cache behind.
-func save(path string, v any) error {
+func Save(path string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
