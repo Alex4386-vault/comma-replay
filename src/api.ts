@@ -89,6 +89,28 @@ export async function fetchRecords(deviceId: string): Promise<string[]> {
   return body.records ?? [];
 }
 
+export type SegmentKind = "rlog" | "qlog" | "qcamera" | "fcamera" | "ecamera" | "dcamera";
+
+export type ServerRoute = {
+  id: string;
+  segments: { n: number; dir: string; kinds: SegmentKind[] }[];
+  /** Cached drive meta, present when it still matches the route's synced qlogs. */
+  meta?: CachedDriveMeta;
+};
+
+/** Routes with per-segment file kinds; null when the server predates /routes. */
+export async function fetchRoutes(
+  deviceId: string,
+  opts?: { fresh?: boolean },
+): Promise<ServerRoute[] | null> {
+  const q = opts?.fresh ? "?fresh=1" : "";
+  const res = await apiFetch(`/api/devices/${encodeURIComponent(deviceId)}/routes${q}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`routes: ${res.status}`);
+  const body = (await res.json()) as { routes?: ServerRoute[] | null };
+  return body.routes ?? [];
+}
+
 export type RecordFileEntry = {
   name: string;
   path: string;

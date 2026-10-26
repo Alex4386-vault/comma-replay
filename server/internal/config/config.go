@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Addr               string
 	DataRoot           string
+	CacheDir           string // drive meta + geocode caches; must be writable ("" = memory only)
 	FrontendOrigins    []string
 	GoogleClientID     string
 	GoogleClientSecret string // optional; server-only
@@ -22,6 +23,7 @@ func FromEnv() (Config, error) {
 	cfg := Config{
 		Addr:               getenv("REPLAY_ADDR", ":8080"),
 		DataRoot:           getenv("REPLAY_DATA_ROOT", "./data"),
+		CacheDir:           getenv("REPLAY_CACHE_DIR", "./cache"),
 		FrontendOrigins:    splitOrigins(getenv("REPLAY_FRONTEND_ORIGIN", "http://localhost:5173")),
 		GoogleClientID:     strings.TrimSpace(os.Getenv("REPLAY_GOOGLE_CLIENT_ID")),
 		GoogleClientSecret: strings.TrimSpace(os.Getenv("REPLAY_GOOGLE_CLIENT_SECRET")),

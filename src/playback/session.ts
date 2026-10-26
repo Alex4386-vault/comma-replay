@@ -1,6 +1,7 @@
 /** Drive-relative playback clock (seconds from drive start). */
 
-export type PlaybackQuality = "qcamera" | "fcamera";
+/** "logs" plays the drive without video (cameras not synced yet). */
+export type PlaybackQuality = "qcamera" | "fcamera" | "logs";
 
 export type OverlayStyle = "none" | "comma3x-stock" | "comma3x-sunnypilot" | "comma4";
 
@@ -20,7 +21,7 @@ export type SessionState = {
 
 export const SEGMENT_SECONDS = 60;
 
-export function initialSession(segmentCount: number): SessionState {
+export function initialSession(segmentCount: number, quality: PlaybackQuality = "qcamera"): SessionState {
   const duration = Math.max(1, segmentCount) * SEGMENT_SECONDS;
   return {
     t: 0,
@@ -29,7 +30,7 @@ export function initialSession(segmentCount: number): SessionState {
     rate: 1,
     inPoint: 0,
     outPoint: duration,
-    quality: "qcamera",
+    quality,
     overlay: "none",
   };
 }

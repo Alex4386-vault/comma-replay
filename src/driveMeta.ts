@@ -1,7 +1,7 @@
 import { FILE_NAMES } from "@/route/patterns";
 import { gpsLockInLog, type GpsFix, type GpsLockMode } from "@/log/gps";
 import type { DataSource } from "@/source/types";
-import type { RecordEntry } from "@/records";
+import { segmentHas, type RecordEntry } from "@/records";
 import {
   fetchDriveMeta,
   fetchGeocode,
@@ -40,7 +40,7 @@ export type DriveMeta = {
 
 export type EnrichOptions = {
   reverseGeocode: boolean;
-  /** When set, prefer server in-memory drive meta + geocode caches. */
+  /** When set, prefer the server's persistent drive meta + geocode caches. */
   serverCache?: { deviceId: string; recordId: string };
 };
 
@@ -241,7 +241,7 @@ function toCachedMeta(meta: DriveMeta): CachedDriveMeta | null {
   };
 }
 
-function fromCachedMeta(cached: CachedDriveMeta): DriveMeta {
+export function fromCachedMeta(cached: CachedDriveMeta): DriveMeta {
   return {
     status: cached.status,
     first: cached.first,
@@ -257,7 +257,7 @@ function fromCachedMeta(cached: CachedDriveMeta): DriveMeta {
  * 1) first+last qlog → date/time (+ coords)
  * 2) optional expand GPS / reverse geocode → places
  *
- * With `serverCache`, reads/writes the server in-memory drive meta cache and
+ * With `serverCache`, reads/writes the server's persistent drive meta cache and
  * routes reverse geocode through the server lat/lon cache.
  */
 export async function loadDriveMeta(
@@ -281,8 +281,9 @@ export async function loadDriveMeta(
     }
   }
 
-  const paths = record.segmentPaths;
-  LOG(`drive ${record.recordId} — ${paths.length} segment(s)`);
+  // With known file kinds, skip segments whose qlog hasn't synced yet.
+  const paths = record.segmentPaths.filter((_, i) => segmentHas(record, i, ["qlog"]));
+  LOG(`drive ${record.recordId} — ${paths.length} segment(s) with qlog`);
   if (paths.length === 0) {
     const empty: DriveMeta = { status: "empty", first: null, last: null };
     onUpdate(empty);

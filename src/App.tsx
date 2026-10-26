@@ -11,6 +11,17 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Alert,
@@ -19,6 +30,7 @@ import {
 } from "@/components/reui/alert";
 import { AccountMenu } from "@/components/AccountMenu";
 import { DriveCard } from "@/components/DriveCard";
+import { SyncCount } from "@/components/SyncStatus";
 import { DriveDetail } from "@/components/DriveDetail";
 import { DownloadsSheet } from "@/components/DownloadsSheet";
 import { useDownloadManager } from "@/downloadManager";
@@ -28,8 +40,8 @@ import {
 } from "@/components/DirectoryLoadingDialog";
 import { LocalDirectoryDialog } from "@/components/LocalDirectoryDialog";
 import { SourcePickerTabs } from "@/components/SourcePickerTabs";
-import { createEnrichQueue, loadDriveMeta, type DriveMeta } from "@/driveMeta";
-import { useSettings } from "@/settings";
+import { createEnrichQueue, fromCachedMeta, loadDriveMeta, type DriveMeta } from "@/driveMeta";
+import { useSettings, type DriveFilter } from "@/settings";
 import { FileSystemAccessSource } from "@/source/fileSystemAccess";
 import { ServerApiSource } from "@/source/serverApi";
 import type { DataSource } from "@/source/types";
@@ -38,6 +50,7 @@ import {
   fetchMe,
   fetchProviders,
   fetchRecords,
+  fetchRoutes,
   logout,
   type AuthProviders,
   type AuthUser,
@@ -48,6 +61,8 @@ import {
   recordsForDevice,
   serverDevices,
   serverRecords,
+  serverRouteRecords,
+  availability,
   type DeviceEntry,
   type LocalDirLayout,
   type RecordEntry,
@@ -209,6 +224,18 @@ export function App() {
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const { activeCount } = useDownloadManager();
 
+  /** Drives for a server device, with synced-file kinds and cached meta when the server has /routes. */
+  const loadServerRecords = useCallback(async (deviceId: string) => {
+    const routes = await fetchRoutes(deviceId);
+    const recs = routes ? serverRouteRecords(deviceId, routes) : serverRecords(deviceId, await fetchRecords(deviceId));
+    setAllRecords(recs);
+    const seeded: Record<string, DriveMeta> = {};
+    for (const rec of recs) {
+      if (rec.cachedMeta) seeded[rec.id] = fromCachedMeta(rec.cachedMeta);
+    }
+    setDriveMeta(seeded);
+  }, []);
+
   const loadServer = useCallback(async (deviceId?: string) => {
     setLoading(true);
     setSelectedRecord(null);
@@ -227,8 +254,7 @@ export function App() {
       setSelectedDeviceId(nextDevice);
 
       if (nextDevice) {
-        const recordIds = await fetchRecords(nextDevice);
-        setAllRecords(serverRecords(nextDevice, recordIds));
+        await loadServerRecords(nextDevice);
       } else {
         setAllRecords([]);
       }
@@ -242,7 +268,7 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadServerRecords]);
 
   const loadLocal = useCallback(async (source: DataSource, layout: LocalDirLayout) => {
     setSelectedRecord(null);
@@ -319,9 +345,10 @@ export function App() {
 
     if (sourceKind === "server") {
       setLoading(true);
+      enrichStarted.current = new Set();
+      enrichQueue.current = createEnrichQueue();
       try {
-        const recordIds = await fetchRecords(deviceId);
-        setAllRecords(serverRecords(deviceId, recordIds));
+        await loadServerRecords(deviceId);
       } catch (err) {
         toast.error("Something went wrong", {
           description: err instanceof Error ? err.message : String(err),
@@ -349,7 +376,7 @@ export function App() {
     setDirScan(null);
   }
 
-  const visibleRecords = useMemo(() => {
+  const deviceRecords = useMemo(() => {
     if (sourceKind === "server") return allRecords;
     if (sourceKind === "local") {
       return recordsForDevice(allRecords, selectedDeviceId, localLayout);
@@ -357,7 +384,31 @@ export function App() {
     return [];
   }, [allRecords, localLayout, selectedDeviceId, sourceKind]);
 
-  const { settings } = useSettings();
+  const { settings, setSettings } = useSettings();
+
+  const syncCounts = useMemo(() => {
+    const counts = { complete: 0, partial: 0, "logs-only": 0, empty: 0 };
+    for (const rec of deviceRecords) {
+      const a = availability(rec);
+      if (a) counts[a.status] += 1;
+    }
+    return counts;
+  }, [deviceRecords]);
+
+  const visibleRecords = useMemo(
+    () =>
+      deviceRecords.filter((rec) => {
+        const a = availability(rec);
+        if (!a) return true; // local dirs: file kinds unknown
+        if (settings.hideEmptyDrives && a.status === "empty") return false;
+        if (settings.driveFilter === "video") return a.video > 0;
+        if (settings.driveFilter === "complete") return a.status === "complete";
+        return true;
+      }),
+    [deviceRecords, settings.hideEmptyDrives, settings.driveFilter],
+  );
+  const hiddenCount = deviceRecords.length - visibleRecords.length;
+  const filterActive = settings.hideEmptyDrives || settings.driveFilter !== "all";
 
   const activeSource = sourceKind === "local" ? localSource : sourceKind === "server" ? serverSource : null;
 
@@ -396,7 +447,9 @@ export function App() {
 
   const emptyAlert =
     hasSource && !loading && dirScan == null && visibleRecords.length === 0
-      ? sourceKind === "server"
+      ? deviceRecords.length > 0
+        ? `All ${deviceRecords.length} drives are hidden by the filter.`
+        : sourceKind === "server"
         ? selectedDeviceId
           ? `No record_id folders under device ${selectedDeviceId}.`
           : "No device_id folders in your server tree."
@@ -450,16 +503,60 @@ export function App() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex flex-col gap-2">
                     <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
-                    <p className="text-sm text-muted-foreground">
-                      <span className="font-medium text-foreground">{visibleRecords.length}</span>
-                      {" "}
-                      {visibleRecords.length === 1 ? "drive" : "drives"}
-                    </p>
+                    {loading ? (
+                      <Skeleton className="h-5 w-40" />
+                    ) : (
+                      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                        <span>
+                          <span className="font-medium text-foreground">{visibleRecords.length}</span>{" "}
+                          {visibleRecords.length === 1 ? "drive" : "drives"}
+                          {hiddenCount > 0 ? ` · ${hiddenCount} hidden by filter` : ""}
+                        </span>
+                        {deviceRecords.some((r) => r.segmentKinds) ? (
+                          <span className="flex items-center gap-3 text-xs">
+                            <SyncCount status="complete" count={syncCounts.complete} />
+                            <SyncCount status="partial" count={syncCounts.partial} />
+                            <SyncCount status="logs-only" count={syncCounts["logs-only"]} />
+                            <SyncCount status="empty" count={syncCounts.empty} />
+                          </span>
+                        ) : null}
+                      </p>
+                    )}
                   </div>
-                  <Button type="button" variant="outline" size="sm" disabled>
-                    <FilterIcon data-icon="inline-start" />
-                    Filter
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant={filterActive ? "secondary" : "outline"}
+                        size="sm"
+                        disabled={sourceKind !== "server"}
+                        title={sourceKind === "server" ? undefined : "Sync status is only known for server drives"}
+                      >
+                        <FilterIcon data-icon="inline-start" />
+                        Filter
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-60">
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>Show</DropdownMenuLabel>
+                        <DropdownMenuRadioGroup
+                          value={settings.driveFilter}
+                          onValueChange={(value) => setSettings({ driveFilter: value as DriveFilter })}
+                        >
+                          <DropdownMenuRadioItem value="all">All drives</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="video">With video</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="complete">Fully synced only</DropdownMenuRadioItem>
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        checked={settings.hideEmptyDrives}
+                        onCheckedChange={(checked) => setSettings({ hideEmptyDrives: Boolean(checked) })}
+                      >
+                        Hide drives with no files
+                      </DropdownMenuCheckboxItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               ) : null}
 

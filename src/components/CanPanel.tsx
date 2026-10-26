@@ -3,6 +3,8 @@ import {
   CrosshairIcon,
   DownloadIcon,
   EraserIcon,
+  ExternalLinkIcon,
+  PanelRightIcon,
   SearchIcon,
   StarIcon,
   WandSparklesIcon,
@@ -98,6 +100,9 @@ export function CanPanel({
   seekTo,
   onMarkers,
   onClose,
+  onPopout,
+  onDock,
+  fill = false,
 }: {
   timeline: CanTimeline | null;
   t: number;
@@ -105,6 +110,12 @@ export function CanPanel({
   seekTo: (t: number) => void;
   onMarkers: (times: number[]) => void;
   onClose: () => void;
+  /** Move the panel into its own window. */
+  onPopout?: () => void;
+  /** Bring a popped-out panel back beside the video. */
+  onDock?: () => void;
+  /** Fill the container (separate window) instead of the side column width. */
+  fill?: boolean;
 }) {
   const t = useThrottled(liveT, playing ? 100 : 30);
   const [version, setVersion] = useState(0);
@@ -239,7 +250,12 @@ export function CanPanel({
   );
 
   return (
-    <aside className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden rounded-lg border bg-card lg:w-[32rem]">
+    <aside
+      className={cn(
+        "flex min-h-0 w-full shrink-0 flex-col overflow-hidden rounded-lg border bg-card",
+        fill ? "h-full" : "lg:w-[32rem]",
+      )}
+    >
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <span className="text-sm font-medium">CAN</span>
         {fingerprint ? (
@@ -254,6 +270,30 @@ export function CanPanel({
         ) : null}
         {loading ? <Spinner className="size-3.5" /> : null}
         <span className="ml-auto font-mono text-xs text-muted-foreground tabular-nums">{fmtT(t)}</span>
+        {onPopout ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={onPopout}
+            title="Open in a separate window"
+            aria-label="Open CAN panel in a separate window"
+          >
+            <ExternalLinkIcon />
+          </Button>
+        ) : null}
+        {onDock ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={onDock}
+            title="Dock beside the video"
+            aria-label="Dock CAN panel beside the video"
+          >
+            <PanelRightIcon />
+          </Button>
+        ) : null}
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close CAN panel">
           <XIcon />
         </Button>

@@ -40,7 +40,11 @@ import {
   type PlaybackQuality,
   type SessionState,
 } from "@/playback/session";
-import { driveSummary, type RecordEntry } from "@/records";
+import { availability, driveSummary, withSegments, type RecordEntry } from "@/records";
+import type { SegmentKind } from "@/api";
+import { LogClockSource } from "@/playback/logClockSource";
+import { PopoutWindow, openPopoutWindow } from "@/components/PopoutWindow";
+import { toast } from "sonner";
 import type { DriveMeta } from "@/driveMeta";
 import type { DataSource } from "@/source/types";
 import { useSettings } from "@/settings";
@@ -55,6 +59,39 @@ import { CanTimeline } from "@/can/canTimeline";
 import { cn } from "@/lib/utils";
 
 const RATES = [0.5, 1, 2, 4] as const;
+
+/** Files a segment needs to be playable in each mode. */
+const QUALITY_KINDS: Record<PlaybackQuality, SegmentKind[]> = {
+  qcamera: ["qcamera"],
+  fcamera: ["fcamera"],
+  logs: ["rlog", "qlog"],
+};
+
+const QUALITY_LABEL: Record<PlaybackQuality, string> = {
+  qcamera: "qcamera",
+  fcamera: "fcamera",
+  logs: "logs",
+};
+
+/** Best mode the drive's synced files allow: qcamera, else fcamera, else logs only. */
+function pickQuality(record: RecordEntry): PlaybackQuality {
+  const a = availability(record);
+  if (!a || a.qcamera > 0) return "qcamera";
+  if (a.fcamera > 0 && FcameraSource.isSupported()) return "fcamera";
+  return "logs";
+}
+
+/** "3, 5–7" from sorted segment numbers. */
+function segmentRanges(nums: number[]): string {
+  const parts: string[] = [];
+  for (let i = 0; i < nums.length; ) {
+    let j = i;
+    while (j + 1 < nums.length && nums[j + 1] === nums[j]! + 1) j++;
+    parts.push(i === j ? `${nums[i]}` : `${nums[i]}–${nums[j]}`);
+    i = j + 1;
+  }
+  return parts.join(", ");
+}
 
 export function DriveDetail({
   source,
@@ -80,13 +117,25 @@ export function DriveDetail({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRowRef = useRef<HTMLDivElement>(null);
   const perfHudRef = useRef<HTMLDivElement>(null);
-  const sourceRef = useRef<QcameraSource | FcameraSource | null>(null);
+  const sourceRef = useRef<QcameraSource | FcameraSource | LogClockSource | null>(null);
   const timelineRef = useRef<CerealTimeline | null>(null);
-  const sessionRef = useRef<SessionState>(initialSession(record.segments.length));
   const [session, setSession] = useState<SessionState>(() =>
-    initialSession(record.segments.length),
+    initialSession(record.segments.length, pickQuality(record)),
   );
+  const sessionRef = useRef<SessionState>(session);
   sessionRef.current = session;
+  // Play only the segments that have this mode's files; partly synced drives
+  // skip the gaps instead of failing on the first missing file.
+  const playRecord = useMemo(
+    () => withSegments(record, QUALITY_KINDS[session.quality]),
+    [record, session.quality],
+  );
+  const skippedSegments = useMemo(() => {
+    const kept = new Set(playRecord.segments);
+    return record.segments.filter((n) => !kept.has(n));
+  }, [record, playRecord]);
+  const sync = availability(record);
+  const [skipNoticeHidden, setSkipNoticeHidden] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [overlayLoading, setOverlayLoading] = useState(false);
@@ -96,8 +145,11 @@ export function DriveDetail({
   const [mapSize, setMapSize] = useState(0);
   const scrubbing = useRef(false);
   // CAN index lives outside the camera effect so switching quality keeps it warm.
-  const canTimeline = useMemo(() => new CanTimeline(source, record), [source, record]);
+  const canTimeline = useMemo(() => new CanTimeline(source, playRecord), [source, playRecord]);
   const [canMarkers, setCanMarkers] = useState<number[]>([]);
+  // Popped-out CAN window. Opened inside click handlers only (popups need a
+  // user gesture); with no window the panel docks beside the video.
+  const [canWin, setCanWin] = useState<Window | null>(null);
   const loadedSeg = useRef(-1);
 
   const patch = useCallback((partial: Partial<SessionState>) => {
@@ -109,7 +161,13 @@ export function DriveDetail({
     const frameCanvas = frameCanvasRef.current;
     if (!video || !frameCanvas) return;
     let cancelled = false;
-    timelineRef.current = new CerealTimeline(source, record);
+    if (playRecord.segmentPaths.length === 0) {
+      // Nothing playable synced yet; the empty state explains it.
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    timelineRef.current = new CerealTimeline(source, playRecord);
     loadedSeg.current = -1;
 
     const events = {
@@ -120,10 +178,12 @@ export function DriveDetail({
       onEnded: () => patch({ playing: false }),
       onError: (message: string) => setError(message),
     };
-    const useFcamera = session.quality === "fcamera";
-    const q: QcameraSource | FcameraSource = useFcamera
-      ? new FcameraSource(source, record, frameCanvas, events)
-      : new QcameraSource(source, record, video, events);
+    const q: QcameraSource | FcameraSource | LogClockSource =
+      session.quality === "fcamera"
+        ? new FcameraSource(source, playRecord, frameCanvas, events)
+        : session.quality === "logs"
+          ? new LogClockSource(playRecord, events)
+          : new QcameraSource(source, playRecord, video, events);
     sourceRef.current = q;
     setLoading(true);
     setError(null);
@@ -147,7 +207,8 @@ export function DriveDetail({
       sourceRef.current = null;
       timelineRef.current = null;
     };
-  }, [source, record, patch, session.quality]);
+    // playRecord follows session.quality, so a quality switch reopens the source.
+  }, [source, playRecord, patch]);
 
   useEffect(() => {
     sourceRef.current?.setRate(session.rate);
@@ -201,7 +262,7 @@ export function DriveDetail({
     if (!needLogs) return;
     const timeline = timelineRef.current;
     if (!timeline) return;
-    const { index } = timeToSegment(sessionRef.current.t, record.segmentPaths.length);
+    const { index } = timeToSegment(sessionRef.current.t, playRecord.segmentPaths.length);
     if (!timeline.hasSegment(index)) setOverlayLoading(true);
     timeline.prefetchWindow(index, 3);
     void timeline
@@ -214,7 +275,7 @@ export function DriveDetail({
         console.error("[replay] overlay log failed", err);
         setOverlayLoading((on) => (on ? false : on));
       });
-  }, [session.overlay, settings.showMap, record.segmentPaths.length]);
+  }, [session.overlay, settings.showMap, playRecord.segmentPaths.length]);
 
   // When map is on without an overlay painter, still prefetch GPS segments.
   useEffect(() => {
@@ -224,12 +285,12 @@ export function DriveDetail({
       raf = requestAnimationFrame(tick);
       const timeline = timelineRef.current;
       if (!timeline) return;
-      const { index } = timeToSegment(sessionRef.current.t, record.segmentPaths.length);
+      const { index } = timeToSegment(sessionRef.current.t, playRecord.segmentPaths.length);
       timeline.prefetchWindow(index, sessionRef.current.rate >= 2 ? 3 : 2);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [settings.showMap, session.overlay, record.segmentPaths.length]);
+  }, [settings.showMap, session.overlay, playRecord.segmentPaths.length]);
 
   useEffect(() => {
     if (session.overlay === "none") return;
@@ -266,7 +327,7 @@ export function DriveDetail({
       const live = scrubbing.current ? NaN : (sourceRef.current?.currentTime() ?? NaN);
       const t = Number.isFinite(live) ? live : s.t;
 
-      const { index } = timeToSegment(t, record.segmentPaths.length);
+      const { index } = timeToSegment(t, playRecord.segmentPaths.length);
       timeline.prefetchWindow(index, s.rate >= 2 ? 3 : 2);
 
       const dpr = window.devicePixelRatio || 1;
@@ -313,7 +374,7 @@ export function DriveDetail({
     return () => {
       cancelAnimationFrame(raf);
     };
-  }, [session.overlay, settings.useMetric, settings.overlayMetrics, settings.disableOverlayInterpolation, settings.sunnypilotOverlay, record.segmentPaths.length]);
+  }, [session.overlay, settings.useMetric, settings.overlayMetrics, settings.disableOverlayInterpolation, settings.sunnypilotOverlay, playRecord.segmentPaths.length]);
 
   function togglePlay() {
     const q = sourceRef.current;
@@ -351,7 +412,43 @@ export function DriveDetail({
       return;
     }
     setError(null);
-    patch({ quality });
+    setSkipNoticeHidden(false);
+    // Each mode plays a different set of segments, so the clock restarts.
+    patch({ quality, t: 0, playing: false });
+  }
+
+  function popOutCan(): boolean {
+    const win = openPopoutWindow(`comma-replay-can-${record.recordId}`);
+    if (!win) {
+      toast.error("Popup blocked", {
+        description: "Allow popups for this site to open the CAN inspector in its own window.",
+      });
+      return false;
+    }
+    setCanWin(win);
+    return true;
+  }
+
+  function openCan() {
+    if (settings.canPopout && !canWin) popOutCan(); // blocked: falls back to docked
+    setSettings({ showCan: true });
+  }
+
+  function closeCan() {
+    canWin?.close();
+    setCanWin(null);
+    setSettings({ showCan: false });
+  }
+
+  function setCanPopout(on: boolean) {
+    if (on) {
+      if (settings.showCan && !canWin && !popOutCan()) return;
+      setSettings({ canPopout: true });
+    } else {
+      canWin?.close();
+      setCanWin(null);
+      setSettings({ canPopout: false });
+    }
   }
 
   function setOverlay(overlay: OverlayStyle) {
@@ -363,9 +460,12 @@ export function DriveDetail({
   const title = `${summary.dateLabel}  ${summary.timeRange}`;
   const showOverlay = session.overlay !== "none";
   const showMap = settings.showMap;
-  const { index: segmentIndex } = timeToSegment(session.t, record.segmentPaths.length);
-  const segmentNum = record.segments[segmentIndex] ?? segmentIndex;
-  const segmentCount = record.segments.length;
+  const { index: segmentIndex } = timeToSegment(session.t, playRecord.segmentPaths.length);
+  const segmentNum = playRecord.segments[segmentIndex] ?? segmentIndex;
+  const segmentCount = playRecord.segments.length;
+  const nothingToPlay = playRecord.segmentPaths.length === 0;
+  const qualityCount = (q: PlaybackQuality) =>
+    !sync ? null : q === "qcamera" ? sync.qcamera : q === "fcamera" ? sync.fcamera : sync.logs;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -376,6 +476,36 @@ export function DriveDetail({
         <div className="min-w-0 flex-1 text-center">
           <h1 className="truncate text-base font-medium tracking-tight sm:text-lg">{title}</h1>
           <p className="truncate font-mono text-xs text-muted-foreground">{record.recordId}</p>
+          {record.segmentKinds ? (
+            <div
+              className="mx-auto mt-1.5 flex h-1.5 max-w-md gap-px"
+              title="Synced files per segment: green = video + logs, blue = logs only, amber = video only, grey = nothing"
+            >
+              {record.segmentKinds.map((kinds, i) => {
+                const num = record.segments[i];
+                const video = kinds.includes("qcamera") || kinds.includes("fcamera");
+                const logs = kinds.includes("rlog") || kinds.includes("qlog");
+                const playing = num === segmentNum && !nothingToPlay;
+                return (
+                  <span
+                    key={num ?? i}
+                    className={cn(
+                      "h-full flex-1 rounded-[1px]",
+                      video && logs
+                        ? "bg-emerald-500/80"
+                        : logs
+                          ? "bg-sky-500/80"
+                          : video
+                            ? "bg-amber-500/80"
+                            : "bg-muted-foreground/20",
+                      skippedSegments.includes(num!) && "opacity-30",
+                      playing && "ring-1 ring-foreground",
+                    )}
+                  />
+                );
+              })}
+            </div>
+          ) : null}
         </div>
         <Button
           type="button"
@@ -403,9 +533,15 @@ export function DriveDetail({
               </DropdownMenuCheckboxItem>
               <DropdownMenuCheckboxItem
                 checked={settings.showCan}
-                onCheckedChange={(checked) => setSettings({ showCan: Boolean(checked) })}
+                onCheckedChange={(checked) => (checked ? openCan() : closeCan())}
               >
                 CAN inspector
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={settings.canPopout}
+                onCheckedChange={(checked) => setCanPopout(Boolean(checked))}
+              >
+                CAN in separate window
               </DropdownMenuCheckboxItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
@@ -415,8 +551,25 @@ export function DriveDetail({
                 value={session.quality}
                 onValueChange={(value) => setQuality(value as PlaybackQuality)}
               >
-                <DropdownMenuRadioItem value="qcamera">Standard (qcamera)</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="fcamera">High quality (fcamera)</DropdownMenuRadioItem>
+                {(
+                  [
+                    ["qcamera", "Standard (qcamera)"],
+                    ["fcamera", "High quality (fcamera)"],
+                    ["logs", "Logs only (no video)"],
+                  ] as const
+                ).map(([q, label]) => {
+                  const n = qualityCount(q);
+                  return (
+                    <DropdownMenuRadioItem key={q} value={q} disabled={n === 0}>
+                      {label}
+                      {n != null && sync ? (
+                        <span className="ml-auto pl-2 text-xs text-muted-foreground tabular-nums">
+                          {n}/{sync.segments}
+                        </span>
+                      ) : null}
+                    </DropdownMenuRadioItem>
+                  );
+                })}
               </DropdownMenuRadioGroup>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
@@ -488,12 +641,36 @@ export function DriveDetail({
                 !showOverlay && "hidden",
               )}
             />
-            {loading ? (
+            {loading && !nothingToPlay ? (
               <div className="absolute inset-0 flex items-center justify-center bg-black/60">
                 <Button type="button" disabled variant="secondary">
                   <Spinner data-icon="inline-start" />
-                  Loading qcamera…
+                  Loading {QUALITY_LABEL[session.quality]}…
                 </Button>
+              </div>
+            ) : null}
+            {nothingToPlay ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-sm text-white/80">
+                <p className="font-medium text-white">
+                  {sync?.status === "empty"
+                    ? "Nothing from this drive has synced yet."
+                    : `No ${QUALITY_LABEL[session.quality]} for this drive.`}
+                </p>
+                {sync && sync.status !== "empty" ? (
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {(["qcamera", "fcamera", "logs"] as const)
+                      .filter((q) => q !== session.quality && (qualityCount(q) ?? 0) > 0)
+                      .map((q) => (
+                        <Button key={q} type="button" size="sm" variant="secondary" onClick={() => setQuality(q)}>
+                          Play {QUALITY_LABEL[q]} ({qualityCount(q)}/{sync.segments})
+                        </Button>
+                      ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : session.quality === "logs" && !loading ? (
+              <div className="pointer-events-none absolute top-3 left-3 z-20 rounded-md bg-black/70 px-2 py-1 text-xs text-white">
+                No video · playing logs
               </div>
             ) : null}
             {overlayLoading && (showOverlay || showMap) ? (
@@ -510,11 +687,25 @@ export function DriveDetail({
             {error ? (
               <Alert
                 variant="destructive"
-                className="absolute inset-x-3 bottom-3 z-20 border-destructive/40 bg-background/95"
+                className="absolute inset-x-3 bottom-3 z-20 w-auto border-destructive/40 bg-background/95"
               >
                 <CircleAlertIcon />
                 <AlertTitle>Playback error</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
+                <AlertDescription className="[overflow-wrap:anywhere]">
+                  {error}
+                  <span className="mt-2 flex flex-wrap gap-2">
+                    {session.quality !== "fcamera" && FcameraSource.isSupported() && (qualityCount("fcamera") ?? 1) > 0 ? (
+                      <Button type="button" size="xs" variant="outline" onClick={() => setQuality("fcamera")}>
+                        Try fcamera
+                      </Button>
+                    ) : null}
+                    {session.quality !== "logs" && (qualityCount("logs") ?? 1) > 0 ? (
+                      <Button type="button" size="xs" variant="outline" onClick={() => setQuality("logs")}>
+                        Play logs only
+                      </Button>
+                    ) : null}
+                  </span>
+                </AlertDescription>
               </Alert>
             ) : null}
           </div>
@@ -548,7 +739,7 @@ export function DriveDetail({
           ) : null}
         </div>
 
-        {settings.showCan ? (
+        {settings.showCan && !canWin ? (
           <div className="flex h-[55vh] min-h-0 lg:h-auto">
             <CanPanel
               timeline={canTimeline}
@@ -556,11 +747,55 @@ export function DriveDetail({
               playing={session.playing}
               seekTo={(t) => void seekTo(t)}
               onMarkers={setCanMarkers}
-              onClose={() => setSettings({ showCan: false })}
+              onClose={closeCan}
+              onPopout={() => setCanPopout(true)}
             />
           </div>
         ) : null}
       </div>
+
+      {settings.showCan && canWin ? (
+        <PopoutWindow
+          win={canWin}
+          title={`CAN · ${record.recordId}`}
+          onClosed={() => {
+            // Closing the window closes the inspector; the next open pops out again.
+            setCanWin(null);
+            setSettings({ showCan: false });
+          }}
+        >
+          <CanPanel
+            timeline={canTimeline}
+            t={session.t}
+            playing={session.playing}
+            seekTo={(t) => void seekTo(t)}
+            onMarkers={setCanMarkers}
+            onClose={closeCan}
+            onDock={() => setCanPopout(false)}
+            fill
+          />
+        </PopoutWindow>
+      ) : null}
+
+      {skippedSegments.length > 0 && !nothingToPlay && !skipNoticeHidden ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs">
+          <span>
+            No {QUALITY_LABEL[session.quality]} for segment{skippedSegments.length > 1 ? "s" : ""}{" "}
+            <span className="font-mono">{segmentRanges(skippedSegments)}</span> — skipped, so the clock covers{" "}
+            {segmentCount} of {record.segments.length} segments.
+          </span>
+          <span className="ml-auto flex gap-2">
+            {session.quality !== "logs" && (qualityCount("logs") ?? 0) > segmentCount ? (
+              <Button type="button" size="xs" variant="outline" onClick={() => setQuality("logs")}>
+                Logs only (full drive)
+              </Button>
+            ) : null}
+            <Button type="button" size="xs" variant="ghost" onClick={() => setSkipNoticeHidden(true)}>
+              Dismiss
+            </Button>
+          </span>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-3 rounded-lg border bg-card px-3 py-3">
         {settings.showCan && canMarkers.length > 0 ? (
@@ -582,7 +817,7 @@ export function DriveDetail({
           max={Math.max(session.duration, 0.01)}
           step={0.05}
           value={[clampTime(session.t, session.duration)]}
-          disabled={loading || session.duration <= 0}
+          disabled={loading || nothingToPlay || session.duration <= 0}
           onValueChange={(values) => onScrubInput(values[0] ?? 0)}
           onValueCommit={(values) => void onScrubCommit(values[0] ?? 0)}
           aria-label="Scrub timeline"
@@ -603,7 +838,7 @@ export function DriveDetail({
               variant="outline"
               size="icon-sm"
               onClick={togglePlay}
-              disabled={loading || !!error}
+              disabled={loading || nothingToPlay || !!error}
               aria-label={session.playing ? "Pause" : "Play"}
             >
               {session.playing ? <PauseIcon /> : <PlayIcon />}
@@ -626,8 +861,8 @@ export function DriveDetail({
 
           <Badge
             variant="secondary"
-            className="font-mono tabular-nums"
-            title={record.segmentPaths[segmentIndex] ?? undefined}
+            className={cn("font-mono tabular-nums", nothingToPlay && "invisible")}
+            title={playRecord.segmentPaths[segmentIndex] ?? undefined}
           >
             seg {segmentNum}
             <span className="text-muted-foreground">
@@ -679,7 +914,7 @@ export function DriveDetail({
             type="button"
             variant={settings.showCan ? "secondary" : "outline"}
             size="sm"
-            onClick={() => setSettings({ showCan: !settings.showCan })}
+            onClick={() => (settings.showCan ? closeCan() : openCan())}
             aria-pressed={settings.showCan}
             title="CAN inspector"
           >

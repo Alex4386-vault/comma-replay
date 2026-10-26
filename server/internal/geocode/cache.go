@@ -1,12 +1,15 @@
 package geocode
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/Alex4386-vault/comma-replay/server/internal/persist"
 )
 
 type Place struct {
@@ -14,35 +17,69 @@ type Place struct {
 	Region string `json:"region"`
 }
 
+// fallbackTTL keeps a coordinate label from a failed lookup only briefly, so the
+// next request retries the provider instead of serving coordinates for good.
+const fallbackTTL = 10 * time.Minute
+
 type Cache struct {
-	mu      sync.RWMutex
-	byKey   map[string]entry
-	ttl     time.Duration
-	client  *http.Client
+	mu       sync.RWMutex
+	byKey    map[string]entry
+	ttl      time.Duration
+	client   *http.Client
 	inflight map[string]*call
+	file     *persist.File
 }
 
 type entry struct {
-	place Place
-	at    time.Time
+	Place    Place     `json:"place"`
+	At       time.Time `json:"at"`
+	Fallback bool      `json:"-"`
 }
 
 type call struct {
-	done chan struct{}
+	done  chan struct{}
 	place Place
 	err   error
 }
 
-func New(ttl time.Duration) *Cache {
+// New loads the cache from path ("" keeps it in memory only).
+func New(ttl time.Duration, path string) (*Cache, error) {
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
-	return &Cache{
+	c := &Cache{
 		byKey:    make(map[string]entry),
 		ttl:      ttl,
 		client:   &http.Client{Timeout: 8 * time.Second},
 		inflight: make(map[string]*call),
 	}
+	if err := persist.Load(path, &c.byKey); err != nil {
+		return nil, err
+	}
+	c.file = persist.New(path, 5*time.Second, c.snapshot)
+	return c, nil
+}
+
+func (c *Cache) snapshot() any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]entry, len(c.byKey))
+	for k, v := range c.byKey {
+		if !v.Fallback {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// Run persists changes until ctx ends.
+func (c *Cache) Run(ctx context.Context) { c.file.Run(ctx) }
+
+func (e entry) fresh(ttl time.Duration) bool {
+	if e.Fallback {
+		return time.Since(e.At) < fallbackTTL
+	}
+	return time.Since(e.At) < ttl
 }
 
 func key(lat, lon float64) string {
@@ -53,16 +90,16 @@ func (c *Cache) Lookup(lat, lon float64) (Place, error) {
 	k := key(lat, lon)
 
 	c.mu.RLock()
-	if e, ok := c.byKey[k]; ok && time.Since(e.at) < c.ttl {
+	if e, ok := c.byKey[k]; ok && e.fresh(c.ttl) {
 		c.mu.RUnlock()
-		return e.place, nil
+		return e.Place, nil
 	}
 	c.mu.RUnlock()
 
 	c.mu.Lock()
-	if e, ok := c.byKey[k]; ok && time.Since(e.at) < c.ttl {
+	if e, ok := c.byKey[k]; ok && e.fresh(c.ttl) {
 		c.mu.Unlock()
-		return e.place, nil
+		return e.Place, nil
 	}
 	if inflight, ok := c.inflight[k]; ok {
 		c.mu.Unlock()
@@ -74,18 +111,22 @@ func (c *Cache) Lookup(lat, lon float64) (Place, error) {
 	c.mu.Unlock()
 
 	place, err := c.fetch(lat, lon)
-	if err != nil {
+	fallback := err != nil
+	if fallback {
 		place = coordFallback(lat, lon)
 		err = nil
 	}
 
 	c.mu.Lock()
-	c.byKey[k] = entry{place: place, at: time.Now()}
+	c.byKey[k] = entry{Place: place, At: time.Now(), Fallback: fallback}
 	inflight.place = place
 	inflight.err = err
 	delete(c.inflight, k)
 	close(inflight.done)
 	c.mu.Unlock()
+	if !fallback {
+		c.file.MarkDirty()
+	}
 
 	return place, nil
 }

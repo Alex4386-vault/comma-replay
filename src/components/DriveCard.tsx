@@ -2,9 +2,35 @@ import { useEffect, useRef } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DriveMeta } from "@/driveMeta";
-import { driveSummary, type RecordEntry } from "@/records";
+import { availability, driveSummary, type RecordEntry } from "@/records";
+import type { SegmentKind } from "@/api";
+import { SyncBadge } from "@/components/SyncStatus";
 import { useSettings } from "@/settings";
 import { cn } from "@/lib/utils";
+
+function segmentColor(kinds: SegmentKind[]): string {
+  const video = kinds.includes("qcamera") || kinds.includes("fcamera");
+  const logs = kinds.includes("rlog") || kinds.includes("qlog");
+  if (video && logs) return "bg-emerald-500/80";
+  if (logs) return "bg-sky-500/80";
+  if (video) return "bg-amber-500/80";
+  return "bg-muted-foreground/20";
+}
+
+/** One block per segment along the card's bottom edge: what has synced where. */
+function SegmentStrip({ record }: { record: RecordEntry }) {
+  const kinds = record.segmentKinds;
+  if (!kinds) {
+    return <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-sky-500" />;
+  }
+  return (
+    <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 flex h-1 gap-px">
+      {kinds.map((k, i) => (
+        <span key={i} className={cn("h-full flex-1", segmentColor(k))} />
+      ))}
+    </span>
+  );
+}
 
 function Col({
   primary,
@@ -51,6 +77,7 @@ export function DriveCard({
   const fired = useRef(false);
   const visibleTimer = useRef<number | null>(null);
   const s = driveSummary(record, meta, { useMetric: settings.useMetric });
+  const sync = availability(record);
 
   // Partial skeletons: date/duration while scanning ends; places after that until labels land.
   const timingLoading = meta?.status === "loading-timing";
@@ -103,6 +130,7 @@ export function DriveCard({
         className={cn(
           "group relative flex w-full items-center gap-6 overflow-hidden rounded-md bg-muted/40 px-4 py-3.5 text-left transition-colors hover:bg-muted/70",
           selected && "bg-muted/80",
+          sync?.status === "empty" && "opacity-60",
         )}
       >
         <div className="grid min-w-0 flex-1 grid-cols-2 items-center gap-4 sm:grid-cols-4">
@@ -121,11 +149,13 @@ export function DriveCard({
             loading={placesLoading}
           />
         </div>
+        {sync ? (
+          <div className="hidden w-40 shrink-0 md:flex">
+            <SyncBadge a={sync} />
+          </div>
+        ) : null}
         <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground opacity-70 group-hover:opacity-100" />
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-sky-500"
-        />
+        <SegmentStrip record={record} />
       </button>
     </li>
   );

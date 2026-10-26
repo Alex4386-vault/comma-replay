@@ -10,6 +10,8 @@ services:
       # Fixed inside the container; host path comes from REPLAY_DATA_HOST via volume.
       REPLAY_ADDR: ":8080"
       REPLAY_DATA_ROOT: /data
+      # Drive meta + geocode caches survive restarts here (must be writable by uid 65532).
+      REPLAY_CACHE_DIR: /cache
       # Overridable from .env / shell (Compose substitutes ${} from .env automatically).
       REPLAY_FRONTEND_ORIGIN: ${REPLAY_FRONTEND_ORIGIN:-http://localhost:5173}
       REPLAY_GOOGLE_CLIENT_ID: ${REPLAY_GOOGLE_CLIENT_ID:-}
@@ -19,4 +21,5 @@ services:
       REPLAY_ALLOWED_USER_IDS: ${REPLAY_ALLOWED_USER_IDS:-}
     volumes:
       - ${REPLAY_DATA_HOST:-./data}:/data:ro
+      - ${REPLAY_CACHE_HOST:-./cache}:/cache
     restart: unless-stopped

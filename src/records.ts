@@ -1,5 +1,6 @@
 import type { DataSource } from "@/source/types";
 import { TIMESTAMP_SEG_DIR } from "@/route/patterns";
+import type { CachedDriveMeta, SegmentKind, ServerRoute } from "@/api";
 
 /** Local directory layout only — server is always {user_id}/{device_id}/{record_id}. */
 export type LocalDirLayout = "record" | "device-record";
@@ -11,7 +12,71 @@ export type RecordEntry = {
   recordId: string;
   segments: number[];
   segmentPaths: string[];
+  /** File kinds per segment (same order as `segments`); unknown for local dirs. */
+  segmentKinds?: SegmentKind[][];
+  /** Drive meta the server already had cached when the list loaded. */
+  cachedMeta?: CachedDriveMeta;
 };
+
+export type Availability = {
+  status: "complete" | "partial" | "logs-only" | "empty";
+  segments: number;
+  /** Segments with qcamera or fcamera. */
+  video: number;
+  /** Segments with rlog or qlog. */
+  logs: number;
+  qcamera: number;
+  fcamera: number;
+};
+
+/** What a drive has synced, or null when file kinds are unknown (local dirs). */
+export function availability(record: RecordEntry): Availability | null {
+  const kinds = record.segmentKinds;
+  if (!kinds) return null;
+  const count = (pred: (k: SegmentKind[]) => boolean) => kinds.filter(pred).length;
+  const video = count((k) => k.includes("qcamera") || k.includes("fcamera"));
+  const logs = count((k) => k.includes("rlog") || k.includes("qlog"));
+  const segments = kinds.length;
+  const full = count(
+    (k) => (k.includes("qcamera") || k.includes("fcamera")) && (k.includes("rlog") || k.includes("qlog")),
+  );
+  const status =
+    video === 0 && logs === 0
+      ? "empty"
+      : full === segments
+        ? "complete"
+        : video === 0
+          ? "logs-only"
+          : "partial";
+  return {
+    status,
+    segments,
+    video,
+    logs,
+    qcamera: count((k) => k.includes("qcamera")),
+    fcamera: count((k) => k.includes("fcamera")),
+  };
+}
+
+/** Whether segment `index` has any of `kinds`; true when kinds are unknown. */
+export function segmentHas(record: RecordEntry, index: number, kinds: SegmentKind[]): boolean {
+  const k = record.segmentKinds?.[index];
+  if (!k) return true;
+  return kinds.some((kind) => k.includes(kind));
+}
+
+/** The drive narrowed to segments that have any of `kinds` (identity if unknown). */
+export function withSegments(record: RecordEntry, kinds: SegmentKind[]): RecordEntry {
+  if (!record.segmentKinds) return record;
+  const keep = record.segments.map((_, i) => segmentHas(record, i, kinds));
+  if (keep.every(Boolean)) return record;
+  return {
+    ...record,
+    segments: record.segments.filter((_, i) => keep[i]),
+    segmentPaths: record.segmentPaths.filter((_, i) => keep[i]),
+    segmentKinds: record.segmentKinds.filter((_, i) => keep[i]),
+  };
+}
 
 export type DeviceEntry = {
   id: string;
@@ -303,6 +368,19 @@ export function serverRecords(deviceId: string, recordIds: string[]): RecordEntr
     recordIds.map((name) => ({ name, path: `${deviceId}/${name}` })),
     deviceId,
   );
+}
+
+export function serverRouteRecords(deviceId: string, routes: ServerRoute[]): RecordEntry[] {
+  return routes.map((r) => ({
+    id: `${deviceId}/${r.id}`,
+    path: `${deviceId}/${r.segments[0]?.dir ?? r.id}`,
+    deviceId,
+    recordId: r.id,
+    segments: r.segments.map((s) => s.n),
+    segmentPaths: r.segments.map((s) => `${deviceId}/${s.dir}`),
+    segmentKinds: r.segments.map((s) => s.kinds ?? []),
+    cachedMeta: r.meta,
+  }));
 }
 
 export function serverDevices(deviceIds: string[]): DeviceEntry[] {

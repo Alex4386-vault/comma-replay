@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -26,22 +28,68 @@ type Server struct {
 	sessions *auth.Store
 	geocode  *geocode.Cache
 	meta     *meta.Cache
+
+	routesMu    sync.Mutex
+	routesCache map[string]routesEntry
+}
+
+// A device listing reads every segment dir, so keep it briefly; sync only
+// changes it every so often and ?fresh=1 skips the cache.
+const routesTTL = 15 * time.Second
+
+type routesEntry struct {
+	at     time.Time
+	routes []store.Route
 }
 
 func New(cfg config.Config, st *store.Store, sessions *auth.Store, geo *geocode.Cache, driveMeta *meta.Cache) *Server {
 	return &Server{
-		cfg:      cfg,
-		store:    st,
-		sessions: sessions,
-		geocode:  geo,
-		meta:     driveMeta,
+		cfg:         cfg,
+		store:       st,
+		sessions:    sessions,
+		geocode:     geo,
+		meta:        driveMeta,
+		routesCache: make(map[string]routesEntry),
 	}
+}
+
+func (s *Server) routes(userID, deviceID string, fresh bool) ([]store.Route, error) {
+	key := userID + "/" + deviceID
+	s.routesMu.Lock()
+	e, ok := s.routesCache[key]
+	s.routesMu.Unlock()
+	if ok && !fresh && time.Since(e.at) < routesTTL {
+		return e.routes, nil
+	}
+	routes, err := s.store.ListRoutes(userID, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	s.routesMu.Lock()
+	s.routesCache[key] = routesEntry{at: time.Now(), routes: routes}
+	s.routesMu.Unlock()
+	return routes, nil
+}
+
+// routeSignature is the route's current file signature, for meta cache checks.
+func (s *Server) routeSignature(userID, deviceID, routeID string) (string, bool) {
+	routes, err := s.routes(userID, deviceID, false)
+	if err != nil {
+		return "", false
+	}
+	for _, r := range routes {
+		if r.ID == routeID {
+			return r.Signature(), true
+		}
+	}
+	return "", false
 }
 
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.Compress(5, "application/json"))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   s.cfg.FrontendOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "OPTIONS"},
@@ -66,6 +114,7 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/geocode", s.handleGeocode)
 		r.Get("/devices", s.handleDevices)
 		r.Get("/devices/{deviceID}/records", s.handleRecords)
+		r.Get("/devices/{deviceID}/routes", s.handleRoutes)
 		r.Get("/devices/{deviceID}/records/{recordID}/files", s.handleRecordFiles)
 		r.Get("/devices/{deviceID}/records/{recordID}/files/*", s.handleServeFile)
 		r.Get("/devices/{deviceID}/records/{recordID}/meta", s.handleGetDriveMeta)
@@ -195,6 +244,32 @@ func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"records": recs})
 }
 
+type routeResponse struct {
+	store.Route
+	// Meta is the cached drive meta when it still matches the route's files.
+	Meta *meta.DriveMeta `json:"meta,omitempty"`
+}
+
+// handleRoutes lists a device's routes with per-segment file kinds and any
+// cached drive meta, so the drive list needs no per-drive requests.
+func (s *Server) handleRoutes(w http.ResponseWriter, r *http.Request) {
+	sess, _ := sessionFrom(r.Context())
+	deviceID := chi.URLParam(r, "deviceID")
+	routes, err := s.routes(sess.User.ID, deviceID, r.URL.Query().Get("fresh") == "1")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]routeResponse, len(routes))
+	for i, rt := range routes {
+		out[i] = routeResponse{Route: rt}
+		if m, ok := s.meta.Get(sess.User.ID, deviceID, rt.ID, rt.Signature()); ok {
+			out[i].Meta = &m
+		}
+	}
+	writeJSON(w, map[string]any{"routes": out})
+}
+
 func (s *Server) handleRecordFiles(w http.ResponseWriter, r *http.Request) {
 	sess, _ := sessionFrom(r.Context())
 	deviceID := chi.URLParam(r, "deviceID")
@@ -245,7 +320,12 @@ func (s *Server) handleGetDriveMeta(w http.ResponseWriter, r *http.Request) {
 	sess, _ := sessionFrom(r.Context())
 	deviceID := chi.URLParam(r, "deviceID")
 	recordID := chi.URLParam(r, "recordID")
-	m, ok := s.meta.Get(sess.User.ID, deviceID, recordID)
+	sig, ok := s.routeSignature(sess.User.ID, deviceID, recordID)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	m, ok := s.meta.Get(sess.User.ID, deviceID, recordID, sig)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -268,7 +348,12 @@ func (s *Server) handlePutDriveMeta(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "status must be ready, empty, or error", http.StatusBadRequest)
 		return
 	}
-	s.meta.Put(sess.User.ID, deviceID, recordID, body)
+	sig, ok := s.routeSignature(sess.User.ID, deviceID, recordID)
+	if !ok {
+		http.Error(w, "unknown route", http.StatusNotFound)
+		return
+	}
+	s.meta.Put(sess.User.ID, deviceID, recordID, sig, body)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -15,11 +15,19 @@ import {
 
 export type { SunnypilotOverlaySettings };
 
+export type DriveFilter = "all" | "video" | "complete";
+
 export type AppSettings = {
   reverseGeocode: boolean;
   useMetric: boolean;
   showMap: boolean;
   showCan: boolean;
+  /** CAN inspector in its own window instead of beside the video. */
+  canPopout: boolean;
+  /** Drive list: hide drives with no synced logs or video. */
+  hideEmptyDrives: boolean;
+  /** Drive list: "video" = has any video, "complete" = every segment has video and logs. */
+  driveFilter: DriveFilter;
   overlayMetrics: boolean;
   disableOverlayInterpolation: boolean;
   sunnypilotOverlay: SunnypilotOverlaySettings;
@@ -32,6 +40,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   useMetric: true,
   showMap: false,
   showCan: false,
+  canPopout: false,
+  hideEmptyDrives: true,
+  driveFilter: "all",
   overlayMetrics: false,
   disableOverlayInterpolation: false,
   sunnypilotOverlay: { ...DEFAULT_SUNNYPILOT_OVERLAY },
@@ -47,6 +58,10 @@ function loadSettings(): AppSettings {
       useMetric: parsed.useMetric ?? DEFAULT_SETTINGS.useMetric,
       showMap: Boolean(parsed.showMap),
       showCan: Boolean(parsed.showCan),
+      canPopout: Boolean(parsed.canPopout),
+      hideEmptyDrives: parsed.hideEmptyDrives ?? DEFAULT_SETTINGS.hideEmptyDrives,
+      driveFilter:
+        parsed.driveFilter === "video" || parsed.driveFilter === "complete" ? parsed.driveFilter : "all",
       overlayMetrics: Boolean(parsed.overlayMetrics),
       disableOverlayInterpolation: Boolean(parsed.disableOverlayInterpolation),
       sunnypilotOverlay: mergeSunnypilotOverlay(parsed.sunnypilotOverlay),

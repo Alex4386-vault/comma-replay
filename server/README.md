@@ -15,6 +15,10 @@ Go HTTP API for the comma-replay SPA. The SPA starts Google/GitHub OAuth (PKCE);
 
 After login, only `{REPLAY_DATA_ROOT}/{provider}_{oauth_subject}/...` is readable.
 
+## Caches
+
+Drive meta and reverse-geocode results are kept in `REPLAY_CACHE_DIR` (`drive-meta.json`, `geocode.json`) and survive restarts. Drive meta is keyed by the route's qlog coverage, so a drive cached while its logs were still syncing is recomputed once they arrive. The directory must be writable; in Compose it is `REPLAY_CACHE_HOST` mounted at `/cache` (the image runs as uid 65532).
+
 ## Auth
 
 1. FE starts PKCE authorize (Client IDs baked into the SPA).
@@ -35,9 +39,10 @@ After login, only `{REPLAY_DATA_ROOT}/{provider}_{oauth_subject}/...` is readabl
 | GET | `/api/geocode?lat=&lon=` | Bearer | Reverse geocode (in-memory cache; miss → BigDataCloud) |
 | GET | `/api/devices` | Bearer | Device IDs |
 | GET | `/api/devices/{deviceID}/records` | Bearer | Record IDs |
+| GET | `/api/devices/{deviceID}/routes` | Bearer | Routes with per-segment file kinds + cached drive meta (`?fresh=1` skips the 15 s listing cache) |
 | GET | `/api/devices/{deviceID}/records/{recordID}/files` | Bearer | List files |
 | GET | `/api/devices/{deviceID}/records/{recordID}/files/{path}` | Bearer | Download (Range OK) |
-| GET | `/api/devices/{deviceID}/records/{recordID}/meta` | Bearer | Cached drive metrics (404 on miss) |
+| GET | `/api/devices/{deviceID}/records/{recordID}/meta` | Bearer | Cached drive metrics (404 on miss, or when the route's qlogs changed since) |
 | PUT | `/api/devices/{deviceID}/records/{recordID}/meta` | Bearer | Store drive metrics (`ready`/`empty`/`error`) |
 
 Geocode cache key is lat/lon rounded to 3 decimals (24h TTL). Drive meta is keyed by user + device + record (7d TTL). Both live in process memory only.
